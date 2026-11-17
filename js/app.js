@@ -35,6 +35,9 @@ let view = { name: 'orders' };
 let listFilter = 'all';
 let listSearch = '';
 
+// 総額連絡メッセージのあいさつ文（設定で書き換え可。「元の文に戻す」でこれに戻る）
+const DEFAULT_GREETING = 'このたびは私たちの米づくりを応援いただき、誠にありがとうございます。\nご注文内容と合計金額をお知らせいたします。';
+
 function defaultData() {
   return {
     version: 1,
@@ -43,6 +46,7 @@ function defaultData() {
     settings: {
       issuer: { name: '', postal: '', address: '', phone: '' },
       bankInfo: '',
+      greeting: DEFAULT_GREETING,
       prices: Object.fromEntries(BAG_SIZES.map((s) => [s, 0])), // 設定画面で入力
       rates: clone(DEFAULT_RATES),
       autoLockMin: 5,
@@ -742,8 +746,7 @@ function notifyText() {
   return [
     `${name} 様`,
     '',
-    'このたびはお米のご注文をいただき、誠にありがとうございます。',
-    'ご注文内容と合計金額をお知らせいたします。',
+    (st.greeting || '').trim() || DEFAULT_GREETING,
     '',
     ...lines.map((l) => `・${l.type} ${l.size}kg × ${l.count}袋　${yenJ(l.amount)}`),
     ...(isHand(d) ? [] : [`・送料（佐川急便）　${yenJ(d.shippingFee)}`]),
@@ -899,7 +902,14 @@ function renderSettings() {
     </section>
 
     <section class="panel">
-      <h2>お振込先（総額連絡メッセージに記載）</h2>
+      <h2>総額連絡のあいさつ文</h2>
+      <textarea data-s="greeting" rows="3">${esc(st.greeting)}</textarea>
+      <p class="hint">「〇〇 様」の次に入る文です。書き換えると記憶されます。</p>
+      <button class="btn small" data-action="reset-greeting" ${st.greeting === DEFAULT_GREETING ? 'disabled' : ''}>元の文に戻す</button>
+    </section>
+
+    <section class="panel">
+      <h2>お振込先（総額連絡メッセージに記載・手渡しのときは載せません）</h2>
       <textarea data-s="bankInfo" rows="3" placeholder="例：〇〇銀行 〇〇支店 普通 1234567 ヤマダタロウ">${esc(st.bankInfo)}</textarea>
     </section>
 
@@ -1076,6 +1086,10 @@ app.addEventListener('click', async (e) => {
         await persist(); toast('削除しました'); go('customers');
       }
       return;
+    case 'reset-greeting':
+      data.settings.greeting = DEFAULT_GREETING;
+      await persist(); render(); toast('あいさつ文を元に戻しました');
+      return;
     case 'reset-rates':
       if (confirm('送料表を初期値に戻しますか？')) {
         data.settings.rates = clone(DEFAULT_RATES);
@@ -1152,6 +1166,7 @@ app.addEventListener('change', async (e) => {
   if (el.dataset.r) { view.r[el.dataset.r] = el.value; return render(); }
   if (el.dataset.s) {
     setPath(data.settings, el.dataset.s, 'num' in el.dataset ? num(el.value) : el.value);
+    if (el.dataset.s === 'greeting') { const btn = $('[data-action="reset-greeting"]'); if (btn) btn.disabled = el.value === DEFAULT_GREETING; }
     await persist();
     toast('保存しました');
   }
