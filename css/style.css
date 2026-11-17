@@ -246,3 +246,9 @@ label.inline select { text-align: left; }
 .postal-msg { margin: -4px 0 10px; }
 .postal-msg:empty { display: none; }
 .lock-btn { background: var(--card); border: 1px solid var(--line); border-radius: 999px; padding: 5px 12px; font-size: 14px; color: var(--muted); }
+
+.s-noaddr { color: var(--warn); border-style: dashed; }
+.amount small, .tl.grand small { font-size: 12px; font-weight: 600; color: var(--muted); margin-left: 2px; }
+.date-field .lock-note { margin: 4px 0 0; font-size: 13px; }
+.date-field .lock-note:empty { display: none; }
+.date-row input:disabled, .date-row button:disabled { opacity: .45; }

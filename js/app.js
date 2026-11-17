@@ -360,10 +360,10 @@ function orderCard(o) {
   const shipNote = o.shipDate && o.shipDate > today() ? `発送予定 ${fmtDate(o.shipDate)}` : o.shipDate ? `発送 ${fmtDate(o.shipDate)}` : '';
   return `
     <button class="card order-card" data-action="open-order" data-id="${o.id}">
-      <div class="row1"><span class="name">${esc(c.name)} 様</span><span class="amount">${yen(orderTotal(o))}</span></div>
+      <div class="row1"><span class="name">${esc(c.name)} 様</span><span class="amount">${yen(orderTotal(o))}${o.shippingPending ? '<small>＋送料</small>' : ''}</span></div>
       <div class="row2">${esc(c.prefecture || '')}　受注 ${fmtDate(o.orderDate)}${shipNote ? '　' + shipNote : ''}</div>
       <div class="row3">${esc(itemsSummary(o.items))}</div>
-      <div class="badges"><span class="badge s-${ss.key}">${ss.label}</span><span class="badge s-${ps.key}">${ps.label}</span></div>
+      <div class="badges"><span class="badge s-${ss.key}">${ss.label}</span><span class="badge s-${ps.key}">${ps.label}</span>${!addressReady(c) ? '<span class="badge s-noaddr">住所未登録</span>' : ''}</div>
     </button>`;
 }
 
@@ -565,13 +565,14 @@ function renderOrderForm() {
 function dateField(key, label, hint = '') {
   const v = view.draft[key] || '';
   return `
-    <div class="date-field">
+    <div class="date-field" data-field="${key}">
       <label>${label}${hint ? `<small>${hint}</small>` : ''}</label>
       <div class="date-row">
         <input type="date" data-input="${key}" value="${esc(v)}">
         <button class="btn small" data-action="date-today" data-key="${key}">今日</button>
         ${v ? `<button class="btn small ghost" data-action="date-clear" data-key="${key}" aria-label="消去">✕</button>` : ''}
       </div>
+      <p class="lock-note warn"></p>
     </div>`;
 }
 
@@ -579,7 +580,8 @@ function computeDraft() {
   const d = view.draft;
   d.riceAmount = riceAmount(d.items, d.prices);
   const detail = shippingDetail(d.items, d.cust.prefecture, d.combine !== false);
-  if (d.shippingAuto) d.shippingFee = detail ? detail.total : 0;
+  if (d.shippingAuto) d.shippingFee = detail && !detail.error ? detail.total : 0;
+  d.shippingPending = !!shippingPendingReason(d);
   return detail;
 }
 
@@ -593,9 +595,19 @@ function updateTotals() {
       ${lines.length ? lines.map((l) => `<div class="tl"><span>${l.type} ${l.size}kg × ${l.count}袋</span><span>${yenJ(l.amount)}</span></div>`).join('') : '<div class="tl muted"><span>袋数を選んでください</span></div>'}
       <div class="tl sum"><span>お米代金</span><span>${yenJ(d.riceAmount)}</span></div>
       ${d.shippingAuto ? shippingLinesHtml(detail, d.cust.prefecture) : ''}
-      <div class="tl sum"><span>送料</span><span>${yenJ(d.shippingFee)}</span></div>
-      <div class="tl grand"><span>合計</span><span>${yenJ(d.riceAmount + num(d.shippingFee))}</span></div>`;
+      <div class="tl sum"><span>送料</span><span>${d.shippingPending ? '未定' : yenJ(d.shippingFee)}</span></div>
+      <div class="tl grand"><span>合計</span><span>${yenJ(d.riceAmount + num(d.shippingFee))}${d.shippingPending ? '<small>＋送料</small>' : ''}</span></div>`;
   }
+  // 住所が入るまでは発送日、送料が決まるまでは総額連絡日を入れられない
+  const lockField = (key, locked, note) => {
+    const box = $(`[data-field="${key}"]`);
+    if (!box) return;
+    const hasValue = !!d[key];
+    box.querySelectorAll('input, button').forEach((b) => { b.disabled = locked && !hasValue; });
+    box.querySelector('.lock-note').textContent = locked ? note : '';
+  };
+  lockField('shipDate', !addressReady(d.cust), '都道府県とご住所を入れると、発送日を入力できます');
+  lockField('notifiedDate', d.shippingPending, '送料が決まると、総額連絡日を入力できます');
   const sl = $('#status-line');
   if (sl) {
     const ss = shipStatus(d), ps = payStatus(d);
@@ -614,16 +626,42 @@ function validateDraft() {
   const d = view.draft;
   if (d.custMode === '') return '発注者を選んでください';
   if (d.custMode === '__new' && !d.cust.name.trim()) return '発注者名を入力してください';
-  if (!d.cust.prefecture) return '都道府県を選んでください';
   if (!totalBags(d.items)) return '袋数を1つ以上入力してください';
   if (!d.orderDate) return '受注日を入力してください';
   const noPrice = BAG_SIZES.find((s) => !num(d.prices[s]) && RICE_TYPES.some((t) => num(d.items[t.id][s])));
   if (noPrice) return `${noPrice}kgの価格が未設定です。設定で入力してください`;
-  if (d.shippingAuto) {
-    const detail = shippingDetail(d.items, d.cust.prefecture, d.combine !== false);
-    if (!detail || detail.error) return '送料を自動計算できません。送料を手入力してください';
-  }
+  computeDraft();
+  if (d.shipDate && !addressReady(d.cust)) return '発送日を入れるには、都道府県とご住所を入力してください';
+  if (d.notifiedDate && d.shippingPending) return '総額連絡日を入れるには、送料が決まっている必要があります（都道府県を入力するか、送料を手入力）';
   return null;
+}
+
+// 住所（都道府県とご住所）がそろっているか
+const addressReady = (c) => !!(c && c.prefecture && (c.address || '').trim());
+
+// 送料が決まっていない理由（決まっていれば空）
+function shippingPendingReason(d) {
+  if (!d.shippingAuto) return '';
+  if (!d.cust.prefecture) return '都道府県を入力すると送料を計算します';
+  const detail = shippingDetail(d.items, d.cust.prefecture, d.combine !== false);
+  if (!detail) return `${d.cust.prefecture}は送料の自動計算の対象外です。送料を手入力してください`;
+  if (detail.error) return detail.error;
+  return '';
+}
+
+// 発注者の住所が入ったら、その方の「送料未定」の受注の送料を計算し直す
+function recalcPendingShipping(customer) {
+  if (!customer?.prefecture) return 0;
+  let n = 0;
+  for (const o of data.orders) {
+    if (o.customerId !== customer.id || !o.shippingPending || !o.shippingAuto) continue;
+    const detail = shippingDetail(o.items, customer.prefecture, o.combine !== false);
+    if (!detail || detail.error) continue;
+    o.shippingFee = detail.total;
+    o.shippingPending = false;
+    n++;
+  }
+  return n;
 }
 
 async function saveDraft({ silent = false } = {}) {
@@ -642,6 +680,7 @@ async function saveDraft({ silent = false } = {}) {
     customer = customerById(d.custMode);
     Object.assign(customer, { prefecture: d.cust.prefecture, postal: d.cust.postal, address: d.cust.address, phone: d.cust.phone });
   }
+  recalcPendingShipping(customer);
   const { custMode, cust, ...fields } = d;
   const order = { ...fields, customerId: customer.id, updatedAt: Date.now() };
   if (!order.id) { order.id = uid(); order.createdAt = Date.now(); data.orders.push(order); }
@@ -679,6 +718,8 @@ function notifyText() {
 async function doNotify() {
   const err = validateDraft();
   if (err) return toast(err);
+  const why = shippingPendingReason(view.draft);
+  if (why) return toast('送料が未定のため、総額を連絡できません。' + why);
   const text = notifyText(); // 共有シートはタップ直後に開く必要があるため保存より先に
   let shared = false;
   try {
@@ -722,6 +763,7 @@ function renderReceipt() {
       <label>但し書き<textarea data-r="note" rows="2">${esc(r.note)}</textarea></label>
       ${!iss.name ? '<p class="warn">発行者情報が未入力です。「設定」から入力してください。</p>' : ''}
       ${!o.paidDate ? '<p class="warn">この受注はまだ入金確認日が入力されていません。</p>' : ''}
+      ${o.shippingPending ? '<p class="warn">送料が未定です（発注者の住所が未登録）。金額に送料が含まれていません。</p>' : ''}
       <div class="actions">
         <button class="btn primary block" data-action="print">🖨 印刷 / PDF保存</button>
         <button class="btn block" data-action="back-order">受注に戻る</button>
@@ -983,7 +1025,8 @@ app.addEventListener('click', async (e) => {
       if (data.customers.some((c) => c.name === d.name && c.id !== d.id) && !confirm('同じ名前の発注者がいます。保存しますか？')) return;
       if (d.id) Object.assign(customerById(d.id), d);
       else { d.id = uid(); d.createdAt = Date.now(); data.customers.push(clone(d)); }
-      await persist(); toast('保存しました'); return go('customers');
+      const n = recalcPendingShipping(customerById(d.id));
+      await persist(); toast(n ? `保存しました（送料未定だった受注${n}件の送料を計算しました）` : '保存しました'); return go('customers');
     }
     case 'delete-customer':
       if (confirm('この発注者を削除しますか？')) {
