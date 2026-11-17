@@ -269,3 +269,8 @@ label.inline select { text-align: left; }
 .rice-stock .rs-kg { font-weight: 800; font-size: 18px; text-align: right; font-variant-numeric: tabular-nums; }
 .rice-stock .rs-detail { font-size: 13px; color: var(--muted); }
 .rice-stock .rs-note { font-size: 12px; color: var(--muted); margin-top: 4px; }
+
+.notify-to { padding-bottom: 10px; margin-bottom: 10px; border-bottom: 1px dashed var(--line); }
+.notify-to strong { font-size: 18px; }
+.notify-total { font-weight: 800; font-size: 18px; margin-top: 2px; }
+textarea[data-n="text"] { font-size: 15px; line-height: 1.6; }

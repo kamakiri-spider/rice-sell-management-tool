@@ -193,12 +193,12 @@ function go(name, params = {}) {
 function render() {
   if (!data) return renderLock();
   document.body.classList.toggle('receipt-mode', view.name === 'receipt');
-  const titles = { orders: '受注一覧', order: view.id ? '受注の編集' : '新規受注', customers: '発注者', customer: '発注者の編集', settings: '設定', receipt: '領収書' };
+  const titles = { orders: '受注一覧', order: view.id ? '受注の編集' : '新規受注', customers: '発注者', customer: '発注者の編集', settings: '設定', receipt: '領収書', notify: '総額連絡の確認' };
   const main = {
     orders: renderOrders, order: renderOrderForm, customers: renderCustomers,
-    customer: renderCustomerForm, settings: renderSettings, receipt: renderReceipt,
+    customer: renderCustomerForm, settings: renderSettings, receipt: renderReceipt, notify: renderNotify,
   }[view.name]();
-  const tab = { orders: 'orders', order: view.id ? 'orders' : 'new', customers: 'customers', customer: 'customers', settings: 'settings', receipt: 'orders' }[view.name];
+  const tab = { orders: 'orders', order: view.id ? 'orders' : 'new', customers: 'customers', customer: 'customers', settings: 'settings', receipt: 'orders', notify: 'orders' }[view.name];
   app.innerHTML = `
     <header class="topbar no-print">
       <h1>${esc(titles[view.name])}</h1>
@@ -763,24 +763,72 @@ function notifyText() {
   ].join('\n');
 }
 
+// 「総額を連絡する」：まず受注を保存し、送る前に文面を確認・修正する画面へ
 async function doNotify() {
   const err = validateDraft();
   if (err) return toast(err);
   const why = shippingPendingReason(view.draft);
   if (why) return toast('送料が未定のため、総額を連絡できません。' + why);
-  const text = notifyText(); // 共有シートはタップ直後に開く必要があるため保存より先に
-  let shared = false;
-  try {
-    if (navigator.share) { await navigator.share({ text }); shared = true; }
-    else { await navigator.clipboard.writeText(text); toast('メッセージをコピーしました'); shared = true; }
-  } catch (e) {
-    if (e.name === 'AbortError') return;
-    try { await navigator.clipboard.writeText(text); toast('メッセージをコピーしました'); shared = true; } catch { alert(text); shared = true; }
+  const text = notifyText();
+  if (!(await saveDraft({ silent: true }))) return;
+  go('notify', { id: view.id, text });
+}
+
+const NOTIFY_SUBJECT = 'お米のご注文について（合計金額のお知らせ）';
+const mailtoHref = (text) => `mailto:?subject=${encodeURIComponent(NOTIFY_SUBJECT)}&body=${encodeURIComponent(text)}`;
+
+function renderNotify() {
+  const o = orderById(view.id);
+  if (!o) return '<div class="empty">受注が見つかりません</div>';
+  const c = customerById(o.customerId) || {};
+  return `
+    <section class="panel">
+      <div class="notify-to">
+        <div><span class="muted">宛先</span> <strong>${esc(c.name)} 様</strong></div>
+        <div class="muted">${[isHand(o) ? '手渡し' : c.prefecture, c.phone ? '☎ ' + c.phone : ''].filter(Boolean).map(esc).join('　')}</div>
+        <div class="notify-total">合計 ${yenJ(orderTotal(o))}</div>
+      </div>
+      <label>送る文面（ここで直せます）
+        <textarea data-n="text" rows="16">${esc(view.text)}</textarea>
+      </label>
+      <p class="hint">ここでの修正は今回だけです。いつも使うあいさつ文は「設定 → 総額連絡のあいさつ文」で変えられます。</p>
+      <button class="btn small ghost" data-action="notify-reset">文面を作り直す</button>
+    </section>
+    <div class="actions">
+      <button class="btn primary block" data-action="notify-share">📤 LINE・メッセージなどで送る</button>
+      <button class="btn block" data-action="notify-copy">📋 コピーする（LINEなどに貼り付け）</button>
+      <a class="btn block" id="notify-mail" href="${esc(mailtoHref(view.text))}" data-action="notify-mail">✉️ メールで送る</a>
+      <button class="btn block ghost" data-action="back-order">送らずに受注に戻る</button>
+    </div>`;
+}
+
+// 送ったあと：総額連絡日がまだなら今日にするか確認
+async function afterNotified() {
+  const o = orderById(view.id);
+  if (!o || o.notifiedDate) return;
+  if (!confirm(`総額連絡日を今日にして「${isHand(o) ? 'お渡し準備中' : '出荷準備中'}」にしますか？`)) return;
+  o.notifiedDate = today();
+  o.updatedAt = Date.now();
+  await persist();
+  toast('総額連絡日を今日にしました');
+}
+
+async function notifyShare() {
+  const text = view.text;
+  if (!navigator.share) return notifyCopy();
+  try { await navigator.share({ text }); } catch (e) { if (e.name !== 'AbortError') toast('共有できませんでした。コピーをお使いください'); return; }
+  await afterNotified();
+}
+
+async function notifyCopy() {
+  try { await navigator.clipboard.writeText(view.text); }
+  catch {
+    // クリップボードが使えないときは文面を選択状態にする
+    const ta = $('[data-n="text"]'); ta.focus(); ta.select();
+    return toast('文面を選択しました。「コピー」を押してください');
   }
-  if (shared && !view.draft.notifiedDate && confirm('総額連絡日を今日にして「出荷準備中」にしますか？')) {
-    view.draft.notifiedDate = today();
-  }
-  if (await saveDraft({ silent: true })) render();
+  toast('コピーしました。LINEなどに貼り付けてください');
+  setTimeout(afterNotified, 600);
 }
 
 // ---------- 領収書 ----------
@@ -1055,6 +1103,16 @@ app.addEventListener('click', async (e) => {
     case 'date-clear': d[el.dataset.key] = ''; return render();
     case 'save-order': if (await saveDraft()) render(); return;
     case 'notify': return doNotify();
+    case 'notify-share': return notifyShare();
+    case 'notify-copy': return notifyCopy();
+    case 'notify-mail': setTimeout(afterNotified, 1500); return; // リンク先（メール）はそのまま開く
+    case 'notify-reset': {
+      if (!confirm('直した内容を消して、文面を作り直しますか？')) return;
+      view.draft = newDraft(view.id);
+      view.text = notifyText();
+      view.draft = null;
+      return render();
+    }
     case 'receipt':
       if (await saveDraft({ silent: true })) go('receipt', { id: view.id });
       return;
@@ -1129,6 +1187,7 @@ app.addEventListener('input', (e) => {
   if (el.dataset.input === 'shippingFee') { d.shippingFee = num(el.value); return updateTotals(); }
   if (el.dataset.c) { d[el.dataset.c] = el.value; return; }
   if (el.dataset.r) { view.r[el.dataset.r] = el.value; return; }
+  if (el.dataset.n === 'text') { view.text = el.value; const m = $('#notify-mail'); if (m) m.href = mailtoHref(el.value); return; }
 });
 
 // 入力済みの郵便番号の欄をタップしたときも住所を調べる（空なら入れる・違えば置き換えボタンを出す）
