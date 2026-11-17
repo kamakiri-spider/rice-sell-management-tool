@@ -4,6 +4,9 @@ import {
 } from './data.js';
 import { Vault, eraseAll } from './vault.js';
 
+// アプリの版。更新のたびに sw.js の CACHE と一緒に上げます
+const APP_VERSION = '15';
+
 // ---------- ユーティリティ ----------
 const $ = (sel, el = document) => el.querySelector(sel);
 const $$ = (sel, el = document) => [...el.querySelectorAll(sel)];
@@ -1004,6 +1007,12 @@ function renderSettings() {
 
     <section class="panel">
       <button class="btn danger block" data-action="erase">すべてのデータを消去</button>
+    </section>
+
+    <section class="panel">
+      <h2>アプリの版</h2>
+      <p>版 ${APP_VERSION}</p>
+      <button class="btn small" data-action="check-update">最新の版を確認</button>
     </section>`;
 }
 
@@ -1161,6 +1170,7 @@ app.addEventListener('click', async (e) => {
     case 'export': return doExport();
     case 'import': return $('#import-file').click();
     case 'erase': return doErase();
+    case 'check-update': return checkUpdate(true);
   }
 });
 
@@ -1235,7 +1245,40 @@ app.addEventListener('change', async (e) => {
 });
 
 // ---------- 起動 ----------
-if ('serviceWorker' in navigator && location.protocol === 'https:') {
-  navigator.serviceWorker.register('./sw.js').catch(() => {});
+// ---------- 更新 ----------
+// 新しい版が公開されたら、次に開いたとき（または画面に戻ったとき）に取り込みます。
+// 入力途中の内容を消さないよう、自動で再読み込みはせず「タップで更新」を表示します。
+let swReg = null;
+// 最初のインストールで制御が始まったときは案内を出さない
+let firstControl = !navigator.serviceWorker?.controller;
+
+function showUpdateBanner() {
+  if ($('#update-banner')) return;
+  const el = document.createElement('button');
+  el.id = 'update-banner';
+  el.className = 'update-banner no-print';
+  el.textContent = '新しい版があります。タップして更新';
+  el.onclick = async () => { await saveChain; location.reload(); };
+  document.body.appendChild(el);
+}
+
+async function checkUpdate(manual = false) {
+  if (!swReg) { if (manual) toast('この画面では更新を確認できません'); return; }
+  try {
+    await swReg.update();
+    if (swReg.installing || swReg.waiting) { if (manual) toast('新しい版を取り込んでいます…'); return; }
+    // 版の番号をサーバーの app.js と比べる
+    const res = await fetch('js/app.js', { cache: 'no-store' });
+    const latest = (await res.text()).match(/APP_VERSION = '([^']+)'/)?.[1];
+    if (latest && latest !== APP_VERSION) showUpdateBanner();
+    else if (manual) toast(`最新の版です（版 ${APP_VERSION}）`);
+  } catch { if (manual) toast('圏外のため確認できませんでした'); }
+}
+
+if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
+  navigator.serviceWorker.register('./sw.js', { updateViaCache: 'none' }).then((reg) => { swReg = reg; checkUpdate(); }).catch(() => {});
+  // 新しい版の取り込みが終わったら案内を出す（初回インストール時は出さない）
+  navigator.serviceWorker.addEventListener('controllerchange', () => { if (firstControl) { firstControl = false; return; } showUpdateBanner(); });
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') checkUpdate(); });
 }
 render();

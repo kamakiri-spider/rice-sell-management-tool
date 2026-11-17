@@ -1,5 +1,5 @@
 // オフラインでも使えるようにアプリ本体だけをキャッシュします（受注データは扱いません）
-const CACHE = 'rice-orders-v14';
+const CACHE = 'rice-orders-v15'; // js/app.js の APP_VERSION と合わせる
 const ASSETS = [
   './', './index.html', './css/style.css', './js/app.js', './js/data.js', './js/vault.js',
   './manifest.webmanifest', './icons/icon-180.png', './icons/icon-192.png', './icons/icon-512.png',
@@ -21,7 +21,9 @@ self.addEventListener('activate', (e) => {
 self.addEventListener('fetch', (e) => {
   if (e.request.method !== 'GET' || new URL(e.request.url).origin !== location.origin) return;
   e.respondWith(
-    fetch(e.request)
+    // ブラウザ側の一時保存を使わず、毎回サーバーに新しい版がないか確かめる
+    // （画面遷移のリクエストはオプション付きで作り直せないので、URLで取得する）
+    fetch(e.request.url, { cache: 'no-cache', credentials: 'same-origin' })
       .then(async (res) => {
         // 公開ページが止まって 404 などになっても、保存済みの正常なアプリ本体を使い続ける
         if (!res.ok) return (await caches.match(e.request, { ignoreSearch: true })) || res;
