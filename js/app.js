@@ -5,7 +5,7 @@ import {
 import { Vault, eraseAll } from './vault.js';
 
 // アプリの版。更新のたびに sw.js の CACHE と一緒に上げます
-const APP_VERSION = '15';
+const APP_VERSION = '16';
 
 // ---------- ユーティリティ ----------
 const $ = (sel, el = document) => el.querySelector(sel);
@@ -50,7 +50,11 @@ function defaultData() {
     orders: [],
     settings: {
       issuer: { name: '', postal: '', address: '', phone: '' },
-      bankInfo: '',
+      bankInfo: '', // 旧：1つの欄（移行用に残す）
+      payPayInfo: '',
+      bankTransferInfo: '',
+      defaultPayment: 'paypay', // 初めての方の支払い方法
+      paymentSplitNotice: false,
       greeting: DEFAULT_GREETING,
       prices: Object.fromEntries(BAG_SIZES.map((s) => [s, 0])), // 設定画面で入力
       rates: clone(DEFAULT_RATES),
@@ -58,6 +62,27 @@ function defaultData() {
       receiptSeq: 0,
     },
   };
+}
+
+// 以前の「お振込先」1つの欄の内容を、PayPay と銀行振込に振り分ける
+function splitPaymentInfo(text) {
+  const t = (text || '').trim();
+  if (!t) return { paypay: '', bank: '' };
+  const isBankLine = (l) => /銀行|ゆうちょ|信金|信用金庫|農協|ＪＡ|JA|支店|口座|普通|当座/.test(l);
+  const hasPayPay = /paypay|ペイペイ/i.test(t);
+  const lines = t.split('\n');
+  const hasBank = lines.some(isBankLine);
+  if (hasPayPay && !hasBank) return { paypay: t, bank: '' };
+  if (!hasPayPay) return { paypay: '', bank: t };
+  // 両方ある：PayPay の部分と銀行の部分の始まりで分ける（直前の【見出し】もその部分に含める）
+  const isPayPayLine = (l) => /paypay|ペイペイ/i.test(l);
+  const isHeader = (l) => /^\s*[【\[■◆●]/.test(l);
+  const startOf = (pred) => { let i = lines.findIndex(pred); if (i > 0 && isHeader(lines[i - 1]) && !pred(lines[i - 1])) i -= 1; return i; };
+  const pi = startOf(isPayPayLine), bi = startOf(isBankLine);
+  const part = (from, to) => lines.slice(from, to).join('\n').trim();
+  return pi < bi
+    ? { paypay: part(0, bi), bank: part(bi) }
+    : { bank: part(0, pi), paypay: part(pi) };
 }
 
 function migrate(d) {
@@ -68,6 +93,13 @@ function migrate(d) {
   d.settings.issuer = { ...def.settings.issuer, ...d.settings.issuer };
   d.settings.prices = { ...def.settings.prices, ...d.settings.prices };
   delete d.settings.boxSize;
+  if (d.settings.bankInfo && !d.settings.payPayInfo && !d.settings.bankTransferInfo) {
+    const sp = splitPaymentInfo(d.settings.bankInfo);
+    d.settings.payPayInfo = sp.paypay;
+    d.settings.bankTransferInfo = sp.bank;
+    d.settings.bankInfo = '';
+    d.settings.paymentSplitNotice = true;
+  }
   if (OLD_DEFAULT_GREETINGS.includes(d.settings.greeting)) d.settings.greeting = DEFAULT_GREETING;
   for (const r of REGIONS) d.settings.rates[r.id] = { ...def.settings.rates[r.id], ...(d.settings.rates[r.id] || {}) };
   // 以前に保存した郵便番号・電話番号にもハイフンを付ける
@@ -175,6 +207,10 @@ function itemLines(items, prices) {
 }
 const itemsSummary = (items) => itemLines(items, data.settings.prices).map((l) => `${l.type}${l.size}kg×${l.count}`).join('・');
 const orderTotal = (o) => num(o.riceAmount) + num(o.shippingFee);
+
+// 支払い方法：'paypay' / 'bank' / 'both'（受注ごと。未設定なら設定の標準）
+const PAYMENTS = [['paypay', 'PayPay'], ['bank', '銀行振込'], ['both', '両方']];
+const paymentOf = (o) => o.payment || data.settings.defaultPayment || 'paypay';
 
 // 受け渡し方法：'ship'＝佐川急便で配送、'hand'＝手渡し（送料なし・住所不要）
 const isHand = (o) => o.delivery === 'hand';
@@ -415,7 +451,7 @@ function newDraft(id) {
   }
   return {
     id: null, orderDate: today(), notifiedDate: '', shipDate: '', paidDate: '',
-    items: emptyItems(), prices: { ...data.settings.prices }, delivery: 'ship', shippingAuto: true, combine: true, shippingFee: 0, note: '',
+    items: emptyItems(), prices: { ...data.settings.prices }, delivery: 'ship', payment: data.settings.defaultPayment || 'paypay', shippingAuto: true, combine: true, shippingFee: 0, note: '',
     custMode: data.customers.length ? '' : '__new',
     cust: { name: '', prefecture: '', postal: '', address: '', phone: '' },
   };
@@ -520,6 +556,15 @@ async function onPostalInput(el) {
   }
 }
 
+// 選んだ支払い方法の支払い先が設定に書かれていないときの注意
+function paymentWarning(pay) {
+  const st = data.settings;
+  const miss = [];
+  if (pay !== 'bank' && !st.payPayInfo.trim()) miss.push('PayPay');
+  if (pay !== 'paypay' && !st.bankTransferInfo.trim()) miss.push('銀行振込');
+  return miss.length ? `<p class="warn">設定に${miss.join('・')}の支払い先が書かれていません（「設定 → お支払い先」）。</p>` : '';
+}
+
 function prefOptions(selected) {
   return `<option value="">選択してください</option>` + PREFECTURES.map((p) => `<option ${p === selected ? 'selected' : ''}>${p}</option>`).join('');
 }
@@ -559,7 +604,12 @@ function renderOrderForm() {
         <label><input type="radio" name="delivery" data-input="delivery" value="ship" ${!isHand(d) ? 'checked' : ''}><span>🚚 配送（佐川急便）</span></label>
         <label><input type="radio" name="delivery" data-input="delivery" value="hand" ${isHand(d) ? 'checked' : ''}><span>🤝 手渡し</span></label>
       </div>
-      ${isHand(d) ? '<p class="hint">手渡しは送料なし・住所の入力は不要です。</p>' : ''}
+      ${isHand(d) ? '<p class="hint">手渡しは送料なし・住所の入力は不要です。代金は現金の想定で、総額連絡に支払い先は載せません。</p>' : `
+      <h2 class="sub-h">お支払い方法</h2>
+      <div class="segmented three" role="radiogroup">
+        ${PAYMENTS.map(([v, l]) => `<label><input type="radio" name="payment" data-input="payment" value="${v}" ${paymentOf(d) === v ? 'checked' : ''}><span>${l}</span></label>`).join('')}
+      </div>
+      ${paymentWarning(paymentOf(d))}`}
     </section>
 
     <section class="panel">
@@ -726,10 +776,10 @@ async function saveDraft({ silent = false } = {}) {
     customer = data.customers.find((c) => c.name === name);
     if (customer && !confirm(`「${name}」さんは登録済みです。同じ方として登録しますか？`)) return false;
     if (!customer) { customer = { id: uid(), createdAt: Date.now() }; data.customers.push(customer); }
-    Object.assign(customer, { ...d.cust, name, delivery: d.delivery || 'ship' });
+    Object.assign(customer, { ...d.cust, name, delivery: d.delivery || 'ship', ...(isHand(d) ? {} : { payment: paymentOf(d) }) });
   } else {
     customer = customerById(d.custMode);
-    Object.assign(customer, { prefecture: d.cust.prefecture, postal: d.cust.postal, address: d.cust.address, phone: d.cust.phone, delivery: d.delivery || 'ship' });
+    Object.assign(customer, { prefecture: d.cust.prefecture, postal: d.cust.postal, address: d.cust.address, phone: d.cust.phone, delivery: d.delivery || 'ship', ...(isHand(d) ? {} : { payment: paymentOf(d) }) });
   }
   recalcPendingShipping(customer);
   const { custMode, cust, ...fields } = d;
@@ -758,8 +808,8 @@ function notifyText() {
     ...(isHand(d) ? [] : [`・送料（佐川急便）　${yenJ(d.shippingFee)}`]),
     '',
     `合計金額：${yenJ(d.riceAmount + num(d.shippingFee))}`,
-    // 手渡しのときは振込先を載せない
-    ...(!isHand(d) && st.bankInfo.trim() ? ['', '【お振込先】', st.bankInfo.trim()] : []),
+    // 手渡しのときは支払い先を載せない
+    ...(isHand(d) ? [] : paymentLines(paymentOf(d))),
     '',
     isHand(d) ? 'お渡しの日時は、改めてご相談させてください。どうぞよろしくお願いいたします。' : '準備ができ次第、発送いたします。どうぞよろしくお願いいたします。',
     ...(st.issuer.name ? ['', st.issuer.name] : []),
@@ -767,6 +817,20 @@ function notifyText() {
 }
 
 // 「総額を連絡する」：まず受注を保存し、送る前に文面を確認・修正する画面へ
+// 総額連絡メッセージに入れる支払い先（見出しが書かれていなければ付ける）
+function paymentLines(pay) {
+  const st = data.settings;
+  const block = (title, text) => {
+    const t = (text || '').trim();
+    if (!t) return [];
+    return ['', ...(/^\s*[【\[■◆●]/.test(t) ? [] : [title]), t];
+  };
+  const pp = pay !== 'bank' ? block('【お支払い（PayPay）】', st.payPayInfo) : [];
+  const bk = pay !== 'paypay' ? block('【お振込先】', st.bankTransferInfo) : [];
+  if (pp.length && bk.length) return ['', 'お支払いは、PayPayか銀行振込のどちらかでお願いいたします。', ...pp, ...bk];
+  return [...pp, ...bk];
+}
+
 async function doNotify() {
   const err = validateDraft();
   if (err) return toast(err);
@@ -963,8 +1027,15 @@ function renderSettings() {
     </section>
 
     <section class="panel">
-      <h2>お振込先（総額連絡メッセージに記載・手渡しのときは載せません）</h2>
-      <textarea data-s="bankInfo" rows="3" placeholder="例：〇〇銀行 〇〇支店 普通 1234567 ヤマダタロウ">${esc(st.bankInfo)}</textarea>
+      <h2>お支払い先（総額連絡に記載・手渡しのときは載せません）</h2>
+      ${st.paymentSplitNotice ? `<div class="warn box">以前の「お振込先」の内容を、PayPayと銀行振込の欄に自動で分けました。内容を確認してください。
+        <button class="btn small" data-action="dismiss-split">確認しました</button></div>` : ''}
+      <label>PayPay<textarea data-s="payPayInfo" rows="3" placeholder="例：PayPayのリンクやID">${esc(st.payPayInfo)}</textarea></label>
+      <label>銀行振込<textarea data-s="bankTransferInfo" rows="3" placeholder="例：〇〇銀行 〇〇支店 普通 1234567 ヤマダタロウ">${esc(st.bankTransferInfo)}</textarea></label>
+      <p class="hint">受注ごとに「PayPay／銀行振込／両方」を選べます。発注者ごとに前回の選び方を覚えます。</p>
+      <label class="inline">初めての方の標準<select data-s="defaultPayment">
+        ${PAYMENTS.map(([v, l]) => `<option value="${v}" ${st.defaultPayment === v ? 'selected' : ''}>${l}</option>`).join('')}
+      </select></label>
     </section>
 
     <section class="panel">
@@ -1138,7 +1209,7 @@ app.addEventListener('click', async (e) => {
     case 'order-for': {
       go('order', { id: null });
       const c = customerById(el.dataset.id);
-      Object.assign(view.draft, { custMode: c.id, delivery: c.delivery || 'ship', cust: { name: c.name, prefecture: c.prefecture || '', postal: c.postal || '', address: c.address || '', phone: c.phone || '' } });
+      Object.assign(view.draft, { custMode: c.id, delivery: c.delivery || 'ship', payment: c.payment || data.settings.defaultPayment || 'paypay', cust: { name: c.name, prefecture: c.prefecture || '', postal: c.postal || '', address: c.address || '', phone: c.phone || '' } });
       return render();
     }
     case 'save-customer': {
@@ -1156,6 +1227,9 @@ app.addEventListener('click', async (e) => {
         await persist(); toast('削除しました'); go('customers');
       }
       return;
+    case 'dismiss-split':
+      data.settings.paymentSplitNotice = false;
+      await persist(); return render();
     case 'reset-greeting':
       data.settings.greeting = DEFAULT_GREETING;
       await persist(); render(); toast('あいさつ文を元に戻しました');
@@ -1229,9 +1303,11 @@ app.addEventListener('change', async (e) => {
     d.cust = c ? { name: c.name, prefecture: c.prefecture || '', postal: c.postal || '', address: c.address || '', phone: c.phone || '' }
       : { name: '', prefecture: '', postal: '', address: '', phone: '' };
     if (!d.id && c?.delivery) d.delivery = c.delivery; // 新規受注では前回の受け渡し方法を初期値に
+    if (!d.id) d.payment = c?.payment || data.settings.defaultPayment || 'paypay'; // 支払い方法も同様
     return render();
   }
   if (el.dataset.input === 'delivery') { d.delivery = el.value; return render(); }
+  if (el.dataset.input === 'payment') { d.payment = el.value; return render(); }
   if (el.dataset.input === 'shippingAuto') { d.shippingAuto = el.checked; return render(); }
   if (el.dataset.input === 'combine') { d.combine = el.checked; return updateTotals(); }
   if (['orderDate', 'notifiedDate', 'shipDate', 'paidDate'].includes(el.dataset.input)) { d[el.dataset.input] = el.value; return render(); }

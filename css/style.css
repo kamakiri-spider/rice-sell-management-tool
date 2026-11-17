@@ -280,3 +280,7 @@ textarea[data-n="text"] { font-size: 15px; line-height: 1.6; }
   background: var(--primary); color: var(--primary-ink); border: 0; border-radius: 999px;
   padding: 10px 18px; font-weight: 700; font-size: 15px; box-shadow: 0 4px 16px rgba(0,0,0,.2); max-width: calc(100% - 32px);
 }
+
+.panel .sub-h { margin-top: 14px; }
+.segmented.three { grid-template-columns: repeat(3, 1fr); }
+.warn.box .btn { margin-top: 8px; display: flex; }
