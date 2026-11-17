@@ -749,7 +749,8 @@ function notifyText() {
     ...(isHand(d) ? [] : [`・送料（佐川急便）　${yenJ(d.shippingFee)}`]),
     '',
     `合計金額：${yenJ(d.riceAmount + num(d.shippingFee))}`,
-    ...(st.bankInfo.trim() ? ['', '【お振込先】', st.bankInfo.trim()] : []),
+    // 手渡しのときは振込先を載せない
+    ...(!isHand(d) && st.bankInfo.trim() ? ['', '【お振込先】', st.bankInfo.trim()] : []),
     '',
     isHand(d) ? 'お渡しの日時は、改めてご相談させてください。どうぞよろしくお願いいたします。' : '準備ができ次第、発送いたします。どうぞよろしくお願いいたします。',
     ...(st.issuer.name ? ['', st.issuer.name] : []),
