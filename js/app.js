@@ -36,7 +36,9 @@ let listFilter = 'all';
 let listSearch = '';
 
 // 総額連絡メッセージのあいさつ文（設定で書き換え可。「元の文に戻す」でこれに戻る）
-const DEFAULT_GREETING = 'このたびは私たちの米づくりを応援いただき、誠にありがとうございます。\nご注文内容と合計金額をお知らせいたします。';
+const DEFAULT_GREETING = 'このたびは私の米づくりを応援いただき、誠にありがとうございます。\nご注文内容と合計金額をお知らせいたします。';
+// 以前の標準文のままなら、新しい標準文に置き換える（自分で書き換えた文はそのまま）
+const OLD_DEFAULT_GREETINGS = ['このたびは私たちの米づくりを応援いただき、誠にありがとうございます。\nご注文内容と合計金額をお知らせいたします。'];
 
 function defaultData() {
   return {
@@ -63,6 +65,7 @@ function migrate(d) {
   d.settings.issuer = { ...def.settings.issuer, ...d.settings.issuer };
   d.settings.prices = { ...def.settings.prices, ...d.settings.prices };
   delete d.settings.boxSize;
+  if (OLD_DEFAULT_GREETINGS.includes(d.settings.greeting)) d.settings.greeting = DEFAULT_GREETING;
   for (const r of REGIONS) d.settings.rates[r.id] = { ...def.settings.rates[r.id], ...(d.settings.rates[r.id] || {}) };
   // 以前に保存した郵便番号・電話番号にもハイフンを付ける
   for (const o of [d.settings.issuer, ...d.customers]) {
