@@ -238,3 +238,10 @@ label.inline select { text-align: left; }
 .warn.box { border: 1.5px solid var(--warn); border-radius: 10px; padding: 10px; text-align: left; }
 .lock-card .show-pass { justify-content: center; margin: 0 0 12px; color: var(--muted); }
 .lock-card .show-pass input { width: 20px; height: 20px; margin: 0; }
+
+.with-key { display: flex; gap: 6px; align-items: stretch; margin-top: 4px; }
+.with-key input { margin-top: 0; flex: 1; }
+.with-key .key { flex: none; width: 52px; border-radius: 10px; border: 1px solid var(--line); background: var(--card); font-size: 22px; font-weight: 700; color: var(--text); }
+.with-key .key:active { background: var(--line); }
+.postal-msg { margin: -4px 0 10px; }
+.postal-msg:empty { display: none; }

@@ -377,6 +377,105 @@ function newDraft(id) {
   };
 }
 
+// ---------- 郵便番号・電話番号 ----------
+function postalField(attr, value) {
+  return `
+    <label>郵便番号<small>7桁を入れると住所が自動で入ります</small>
+      <div class="with-key">
+        <input ${attr} data-postal value="${esc(value)}" inputmode="numeric" autocomplete="off" placeholder="例：860-0000">
+        <button type="button" class="key" data-key="-" aria-label="ハイフン">－</button>
+      </div>
+    </label>
+    <div class="postal-msg hint"></div>`;
+}
+
+function phoneField(attr, value) {
+  return `
+    <label>電話番号
+      <div class="with-key">
+        <input ${attr} data-phone value="${esc(value)}" type="tel" autocomplete="off" placeholder="例：090-1234-5678">
+        <button type="button" class="key" data-key="-" aria-label="ハイフン">－</button>
+      </div>
+    </label>`;
+}
+
+// 全角→半角、いろいろな横棒→「-」
+const normDigits = (v) => v.normalize('NFKC').replace(/[‐－―ー−–—]/g, '-');
+
+function formatPostal(v) {
+  const t = normDigits(v);
+  const digits = t.replace(/\D/g, '');
+  if (digits.length === 7 && !t.includes('-')) return digits.slice(0, 3) + '-' + digits.slice(3);
+  return t;
+}
+
+// 携帯・IP電話・フリーダイヤルなど、区切り方が決まっている番号だけ自動でハイフンを入れる
+// （固定電話は市外局番の長さが地域で違うため、「－」キーで入れてください）
+function formatPhone(v) {
+  const t = normDigits(v);
+  if (t.includes('-')) return t;
+  const d = t.replace(/\D/g, '');
+  if (/^0[5789]0\d{8}$/.test(d)) return `${d.slice(0, 3)}-${d.slice(3, 7)}-${d.slice(7)}`;
+  if (/^(0120|0800)\d{6}$/.test(d)) return `${d.slice(0, 4)}-${d.slice(4, 7)}-${d.slice(7)}`;
+  if (/^0570\d{6}$/.test(d)) return `${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6)}`;
+  return t;
+}
+
+// 郵便番号データ（日本郵便のデータ）を上3桁ごとのファイルで、アプリと同じ場所から読み込みます
+const zipCache = new Map();
+async function lookupPostal(code) {
+  const prefix = code.slice(0, 3);
+  if (!zipCache.has(prefix)) {
+    zipCache.set(prefix, fetch(`zip/${prefix}.json`).then((r) => (r.ok ? r.json() : {})).catch(() => null));
+  }
+  const table = await zipCache.get(prefix);
+  if (table === null) { zipCache.delete(prefix); throw new Error('offline'); }
+  const hit = table[code];
+  if (!hit) return null;
+  const [prefNo, city, town, extra = ''] = hit;
+  return { prefecture: PREFECTURES[prefNo - 1], address: city + town + extra };
+}
+
+async function onPostalInput(el) {
+  const code = normDigits(el.value).replace(/\D/g, '');
+  const box = el.closest('label').nextElementSibling;
+  const msg = box?.classList.contains('postal-msg') ? box : null;
+  if (msg) msg.innerHTML = '';
+  if (code.length !== 7) return;
+  let hit;
+  try { hit = await lookupPostal(code); } catch {
+    if (msg) msg.textContent = '圏外のため住所を検索できませんでした。住所は手で入力してください。';
+    return;
+  }
+  if (normDigits(el.value).replace(/\D/g, '') !== code) return; // 検索中に書き換えられた
+  if (!hit) { if (msg) msg.textContent = 'この郵便番号は見つかりませんでした。'; return; }
+
+  const form = el.closest('.panel');
+  const prefSel = form.querySelector('[data-cust="prefecture"], [data-c="prefecture"]');
+  const addr = form.querySelector('[data-cust="address"], [data-c="address"], [data-s="issuer.address"]');
+  // 発行者の住所欄には都道府県の欄がないので、住所の先頭に都道府県を付ける
+  const text = prefSel ? hit.address : hit.prefecture + hit.address;
+  if (prefSel && prefSel.value !== hit.prefecture) {
+    prefSel.value = hit.prefecture;
+    prefSel.dispatchEvent(new Event('input', { bubbles: true }));
+    prefSel.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+  if (!addr) return;
+  const current = addr.value.trim();
+  const fill = () => {
+    addr.value = text;
+    addr.dispatchEvent(new Event('input', { bubbles: true }));
+    addr.dispatchEvent(new Event('change', { bubbles: true }));
+    if (msg) msg.textContent = '住所を入れました。続けて番地・建物名を入力してください。';
+  };
+  if (!current || text.startsWith(current) || current === text) return fill();
+  if (current.startsWith(text)) return; // すでに番地まで入っている
+  if (msg) {
+    msg.innerHTML = `<button type="button" class="btn small" data-action="postal-fill">住所を「${esc(text)}」に置き換える</button>`;
+    msg.querySelector('button').onclick = fill;
+  }
+}
+
 function prefOptions(selected) {
   return `<option value="">選択してください</option>` + PREFECTURES.map((p) => `<option ${p === selected ? 'selected' : ''}>${p}</option>`).join('');
 }
@@ -401,10 +500,10 @@ function renderOrderForm() {
         </label>` : ''}
       ${d.custMode === '__new' ? `<label>発注者名（新規）<input data-cust="name" value="${esc(d.cust.name)}" placeholder="例：山田 太郎" autocomplete="off"></label>` : ''}
       ${showFields ? `
+        ${postalField('data-cust="postal"', d.cust.postal)}
         <label>都道府県<select data-cust="prefecture">${prefOptions(d.cust.prefecture)}</select></label>
-        <label>郵便番号<input data-cust="postal" value="${esc(d.cust.postal)}" inputmode="numeric" placeholder="例：860-0000"></label>
         <label>ご住所<textarea data-cust="address" rows="2" placeholder="市区町村・番地・建物名">${esc(d.cust.address)}</textarea></label>
-        <label>電話番号<input data-cust="phone" value="${esc(d.cust.phone)}" type="tel" placeholder="例：090-0000-0000"></label>
+        ${phoneField('data-cust="phone"', d.cust.phone)}
         ${d.custMode !== '__new' ? '<p class="hint">ここで変えた住所・連絡先は発注者情報にも反映されます。</p>' : ''}
       ` : ''}
     </section>
@@ -684,10 +783,10 @@ function renderCustomerForm() {
   return `
     <section class="panel">
       <label>発注者名<input data-c="name" value="${esc(c.name)}"></label>
+      ${postalField('data-c="postal"', c.postal)}
       <label>都道府県<select data-c="prefecture">${prefOptions(c.prefecture)}</select></label>
-      <label>郵便番号<input data-c="postal" value="${esc(c.postal)}" inputmode="numeric"></label>
       <label>ご住所<textarea data-c="address" rows="2">${esc(c.address)}</textarea></label>
-      <label>電話番号<input data-c="phone" value="${esc(c.phone)}" type="tel"></label>
+      ${phoneField('data-c="phone"', c.phone)}
       ${c.phone ? `<a class="btn block" href="tel:${esc(c.phone.replace(/[^\d+]/g, ''))}">☎ 電話をかける</a>` : ''}
     </section>
     <div class="actions">
@@ -705,9 +804,9 @@ function renderSettings() {
     <section class="panel">
       <h2>発行者情報（領収書に記載）</h2>
       <label>発行者名<input data-s="issuer.name" value="${esc(st.issuer.name)}" placeholder="例：〇〇農園 山田太郎"></label>
-      <label>郵便番号<input data-s="issuer.postal" value="${esc(st.issuer.postal)}" inputmode="numeric"></label>
+      ${postalField('data-s="issuer.postal"', st.issuer.postal)}
       <label>住所<textarea data-s="issuer.address" rows="2">${esc(st.issuer.address)}</textarea></label>
-      <label>電話番号<input data-s="issuer.phone" value="${esc(st.issuer.phone)}" type="tel"></label>
+      ${phoneField('data-s="issuer.phone"', st.issuer.phone)}
     </section>
 
     <section class="panel">
@@ -903,6 +1002,11 @@ app.addEventListener('click', async (e) => {
 app.addEventListener('input', (e) => {
   const el = e.target;
   const d = view.draft;
+  if ('postal' in el.dataset || 'phone' in el.dataset) {
+    const f = 'postal' in el.dataset ? formatPostal(el.value) : formatPhone(el.value);
+    if (f !== el.value) el.value = f;
+    if ('postal' in el.dataset) onPostalInput(el);
+  }
   if (el.dataset.input === 'search') {
     listSearch = el.value;
     $('#order-list').innerHTML = renderOrderList();
@@ -918,6 +1022,20 @@ app.addEventListener('input', (e) => {
   if (el.dataset.input === 'shippingFee') { d.shippingFee = num(el.value); return updateTotals(); }
   if (el.dataset.c) { d[el.dataset.c] = el.value; return; }
   if (el.dataset.r) { view.r[el.dataset.r] = el.value; return; }
+});
+
+// 「－」キー：キーボードを閉じずにカーソル位置へハイフンを入れる
+app.addEventListener('pointerdown', (e) => {
+  const key = e.target.closest('.key');
+  if (!key) return;
+  e.preventDefault();
+  const input = key.previousElementSibling;
+  input.focus();
+  const start = input.selectionStart ?? input.value.length;
+  const end = input.selectionEnd ?? start;
+  input.value = input.value.slice(0, start) + key.dataset.key + input.value.slice(end);
+  try { input.setSelectionRange(start + 1, start + 1); } catch { /* type=tel でも通常は可 */ }
+  input.dispatchEvent(new Event('input', { bubbles: true }));
 });
 
 app.addEventListener('change', async (e) => {
