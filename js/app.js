@@ -192,7 +192,7 @@ function render() {
   app.innerHTML = `
     <header class="topbar no-print">
       <h1>${esc(titles[view.name])}</h1>
-      <button class="icon-btn" data-action="lock" aria-label="ロック">🔒</button>
+      <button class="lock-btn" data-action="lock">🔒 ロック</button>
     </header>
     <main class="content">${main}</main>
     <nav class="tabbar no-print">

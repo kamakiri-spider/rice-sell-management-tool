@@ -245,3 +245,4 @@ label.inline select { text-align: left; }
 .with-key .key:active { background: var(--line); }
 .postal-msg { margin: -4px 0 10px; }
 .postal-msg:empty { display: none; }
+.lock-btn { background: var(--card); border: 1px solid var(--line); border-radius: 999px; padding: 5px 12px; font-size: 14px; color: var(--muted); }
