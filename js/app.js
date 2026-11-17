@@ -335,12 +335,37 @@ function renderOrders() {
       <div><span class="label">出荷準備中</span><strong>${counts.preparing}件</strong></div>
       <div><span class="label">総額未連絡</span><strong>${counts.new}件</strong></div>
     </section>
+    ${renderPreparingRice(counts.new)}
     <input class="search" type="search" placeholder="名前・住所・電話で検索" value="${esc(listSearch)}" data-input="search">
     <div class="chips">
       ${FILTERS.map(([k, l]) => `<button class="chip ${listFilter === k ? 'active' : ''}" data-action="filter" data-filter="${k}">${l} <span>${counts[k]}</span></button>`).join('')}
     </div>
     <div id="order-list">${renderOrderList()}</div>
   `;
+}
+
+// 出荷準備中（お渡し準備中を含む）の受注に入っているお米の量を、精米・玄米ごとに集計
+function renderPreparingRice(unnotifiedCount) {
+  const orders = data.orders.filter((o) => shipStatus(o).key === 'preparing');
+  if (!orders.length) return '';
+  const rows = RICE_TYPES.map((t) => {
+    const bags = BAG_SIZES.map((sz) => [sz, orders.reduce((a, o) => a + num(o.items?.[t.id]?.[sz]), 0)]);
+    const kg = bags.reduce((a, [sz, n]) => a + sz * n, 0);
+    const detail = bags.filter(([, n]) => n).map(([sz, n]) => `${sz}kg×${n}袋`).join('・');
+    return { name: t.name, kg, detail };
+  });
+  const totalKg = rows.reduce((a, r) => a + r.kg, 0);
+  return `
+    <button class="card rice-stock" data-action="filter" data-filter="preparing">
+      <div class="rs-head"><span>出荷準備中のお米（${orders.length}件）</span><strong>合計 ${totalKg.toLocaleString('ja-JP')}kg</strong></div>
+      ${rows.map((r) => `
+        <div class="rs-row">
+          <span class="rs-type">${r.name}</span>
+          <span class="rs-kg">${r.kg.toLocaleString('ja-JP')}kg</span>
+          <span class="rs-detail">${r.detail || '—'}</span>
+        </div>`).join('')}
+      ${unnotifiedCount ? `<div class="rs-note">総額未連絡の${unnotifiedCount}件は含みません</div>` : ''}
+    </button>`;
 }
 
 function renderOrderList() {
@@ -365,7 +390,7 @@ function orderCard(o) {
   return `
     <button class="card order-card" data-action="open-order" data-id="${o.id}">
       <div class="row1"><span class="name">${esc(c.name)} 様</span><span class="amount">${yen(orderTotal(o))}${o.shippingPending ? '<small>＋送料</small>' : ''}</span></div>
-      <div class="row2">${esc(c.prefecture || '')}　受注 ${fmtDate(o.orderDate)}${shipNote ? '　' + shipNote : ''}</div>
+      <div class="row2">${[c.prefecture, `受注 ${fmtDate(o.orderDate)}`, shipNote].filter(Boolean).map(esc).join('　')}</div>
       <div class="row3">${esc(itemsSummary(o.items))}</div>
       <div class="badges"><span class="badge s-${ss.key}">${ss.label}</span><span class="badge s-${ps.key}">${ps.label}</span>${isHand(o) ? '<span class="badge s-hand">手渡し</span>' : !addressReady(c) ? '<span class="badge s-noaddr">住所未登録</span>' : ''}</div>
     </button>`;
