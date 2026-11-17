@@ -201,37 +201,48 @@ function render() {
 let lockMode = null; // 'setup' | 'unlock'
 let failCount = 0;
 
+// iPhoneのパスワード保存（キーチェーン）が正しく働くよう、ユーザー名欄つきのフォームにしています
+const KEYCHAIN_USER = 'お米受注管理';
+const isIOS = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const isStandalone = navigator.standalone === true || matchMedia('(display-mode: standalone)').matches;
+// 全角で入力されても同じパスコードとして扱う（例：１２３ → 123）
+const normPass = (s) => s.normalize('NFKC');
+
 async function renderLock() {
   document.body.classList.remove('receipt-mode');
   lockMode = (await Vault.exists()) ? 'unlock' : 'setup';
+  const safariNote = isIOS && !isStandalone ? `
+    <p class="warn box">いまSafariの中で開いています。<b>ホーム画面に追加したアイコンから開いてください。</b><br>
+    Safariとホーム画面のアプリでは、データ（とパスコード）が別々に保存されます。</p>` : '';
   app.innerHTML = `
     <div class="lock">
-      <div class="lock-card">
+      <form class="lock-card" id="lock-form" autocomplete="on" action="#">
         <div class="logo">🌾</div>
         <h1>お米受注管理</h1>
+        ${safariNote}
+        <input class="vh" type="text" name="username" autocomplete="username" value="${KEYCHAIN_USER}" readonly tabindex="-1" aria-hidden="true">
         ${lockMode === 'setup' ? `
           <p class="muted">はじめにパスコードを決めてください。データはこのiPhoneの中だけに、このパスコードで暗号化して保存されます。</p>
-          <p class="warn">パスコードを忘れるとデータは復元できません。忘れないようにしてください。</p>
-          <input id="pc1" type="password" autocomplete="new-password" placeholder="パスコード（6文字以上）">
-          <input id="pc2" type="password" autocomplete="new-password" placeholder="もう一度入力">
-          <button class="btn primary block" data-action="setup">はじめる</button>
+          <p class="warn">パスコードを忘れるとデータは復元できません。iPhoneに保存する場合も、紙などに控えておくと安心です。</p>
+          <input id="pc1" name="new-password" type="password" autocomplete="new-password" placeholder="パスコード（6文字以上）">
+          <input id="pc2" name="confirm-password" type="password" autocomplete="new-password" placeholder="もう一度入力">
         ` : `
           <p class="muted">パスコードを入力してください</p>
-          <input id="pc1" type="password" autocomplete="current-password" placeholder="パスコード">
-          <button class="btn primary block" data-action="unlock">ロック解除</button>
-          <button class="link" data-action="forgot">パスコードを忘れた場合</button>
+          <input id="pc1" name="password" type="password" autocomplete="current-password" placeholder="パスコード">
         `}
+        <label class="check show-pass"><input type="checkbox" id="show-pass"> パスコードを表示</label>
+        <button class="btn primary block" type="submit" id="lock-submit">${lockMode === 'setup' ? 'はじめる' : 'ロック解除'}</button>
+        ${lockMode === 'unlock' ? '<button class="link" type="button" data-action="forgot">パスコードを忘れた場合</button>' : ''}
         <p id="lock-msg" class="error"></p>
-      </div>
+      </form>
     </div>`;
-  const pc = $('#pc1');
-  pc?.focus();
-  pc?.addEventListener('keydown', (e) => { if (e.key === 'Enter') (lockMode === 'setup' ? $('#pc2').focus() : doUnlock()); });
-  $('#pc2')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') doSetup(); });
+  $('#lock-form').addEventListener('submit', (e) => { e.preventDefault(); lockMode === 'setup' ? doSetup() : doUnlock(); });
+  $('#show-pass').addEventListener('change', (e) => { $$('#pc1, #pc2').forEach((i) => { i.type = e.target.checked ? 'text' : 'password'; }); });
+  if (!isIOS) $('#pc1')?.focus();
 }
 
 async function doSetup() {
-  const a = $('#pc1').value, b = $('#pc2').value;
+  const a = normPass($('#pc1').value), b = normPass($('#pc2').value);
   if (a.length < 6) return ($('#lock-msg').textContent = '6文字以上にしてください');
   if (a !== b) return ($('#lock-msg').textContent = '2回の入力が一致しません');
   $('#lock-msg').textContent = '準備中…';
@@ -244,22 +255,27 @@ async function doSetup() {
 
 async function doUnlock() {
   const msg = $('#lock-msg');
-  const btn = $('[data-action="unlock"]');
+  const btn = $('#lock-submit');
+  const raw = $('#pc1').value;
+  if (!raw) return (msg.textContent = 'パスコードを入力してください');
   btn.disabled = true;
   msg.textContent = '確認中…';
-  try {
-    data = migrate(await vault.unlock($('#pc1').value));
-    failCount = 0;
-    requestPersistence();
-    lastActive = Date.now();
-    go('orders');
-  } catch (e) {
-    failCount++;
-    const wait = failCount >= 3 ? Math.min(30, 2 ** (failCount - 2)) : 0;
-    msg.textContent = 'パスコードが違います' + (wait ? `（${wait}秒お待ちください）` : '');
-    $('#pc1').value = '';
-    setTimeout(() => { btn.disabled = false; if (!wait) msg.textContent = 'パスコードが違います'; }, wait * 1000);
+  // 以前のバージョンで全角のまま作ったデータも開けるよう、半角化したものと入力そのものの両方を試す
+  const candidates = [...new Set([normPass(raw), raw])];
+  for (const pass of candidates) {
+    try {
+      data = migrate(await vault.unlock(pass));
+      failCount = 0;
+      requestPersistence();
+      lastActive = Date.now();
+      return go('orders');
+    } catch { /* 次の候補へ */ }
   }
+  failCount++;
+  const wait = failCount >= 3 ? Math.min(30, 2 ** (failCount - 2)) : 0;
+  msg.innerHTML = `パスコードが違います（入力された文字数：${raw.length}文字）` + (wait ? `<br>${wait}秒お待ちください` : '') +
+    '<br><small>「パスコードを表示」にチェックすると、入っている文字を確認できます。</small>';
+  setTimeout(() => { btn.disabled = false; }, wait * 1000);
 }
 
 async function lockNow() {
@@ -782,11 +798,14 @@ async function doImport(file) {
 async function doChangePass() {
   const cur = prompt('現在のパスコード');
   if (cur == null) return;
-  try { await new Vault().unlock(cur); } catch { return alert('現在のパスコードが違います'); }
-  const a = prompt('新しいパスコード（6文字以上）');
-  if (a == null) return;
+  let ok = false;
+  for (const c of new Set([normPass(cur), cur])) { try { await new Vault().unlock(c); ok = true; break; } catch { /* 次へ */ } }
+  if (!ok) return alert('現在のパスコードが違います');
+  const a0 = prompt('新しいパスコード（6文字以上）');
+  if (a0 == null) return;
+  const a = normPass(a0);
   if (a.length < 6) return alert('6文字以上にしてください');
-  if (prompt('新しいパスコードをもう一度') !== a) return alert('一致しません');
+  if (normPass(prompt('新しいパスコードをもう一度') || '') !== a) return alert('一致しません');
   await saveChain;
   await vault.changePasscode(a, data);
   toast('パスコードを変更しました');
@@ -813,8 +832,6 @@ app.addEventListener('click', async (e) => {
   const a = el.dataset.action;
   const d = view.draft;
   switch (a) {
-    case 'setup': return doSetup();
-    case 'unlock': return doUnlock();
     case 'forgot':
       if (confirm('パスコードが分からない場合、データを消去して最初からやり直すしかありません。\nバックアップがあれば、やり直した後に「設定 → バックアップから復元」で戻せます（書き出し時のパスコードが必要）。\n\n消去しますか？')) {
         if (prompt('確認のため「消去」と入力してください') === '消去') { await eraseAll(); render(); }
