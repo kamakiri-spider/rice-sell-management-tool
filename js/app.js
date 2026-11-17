@@ -60,6 +60,11 @@ function migrate(d) {
   d.settings.prices = { ...def.settings.prices, ...d.settings.prices };
   delete d.settings.boxSize;
   for (const r of REGIONS) d.settings.rates[r.id] = { ...def.settings.rates[r.id], ...(d.settings.rates[r.id] || {}) };
+  // 以前に保存した郵便番号・電話番号にもハイフンを付ける
+  for (const o of [d.settings.issuer, ...d.customers]) {
+    if (o.postal) o.postal = formatPostal(o.postal);
+    if (o.phone) o.phone = formatPhone(o.phone);
+  }
   return d;
 }
 
@@ -1022,6 +1027,11 @@ app.addEventListener('input', (e) => {
   if (el.dataset.input === 'shippingFee') { d.shippingFee = num(el.value); return updateTotals(); }
   if (el.dataset.c) { d[el.dataset.c] = el.value; return; }
   if (el.dataset.r) { view.r[el.dataset.r] = el.value; return; }
+});
+
+// 入力済みの郵便番号の欄をタップしたときも住所を調べる（空なら入れる・違えば置き換えボタンを出す）
+app.addEventListener('focusin', (e) => {
+  if ('postal' in (e.target.dataset || {})) onPostalInput(e.target);
 });
 
 // 「－」キー：キーボードを閉じずにカーソル位置へハイフンを入れる
