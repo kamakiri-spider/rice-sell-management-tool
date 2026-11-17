@@ -252,3 +252,11 @@ label.inline select { text-align: left; }
 .date-field .lock-note { margin: 4px 0 0; font-size: 13px; }
 .date-field .lock-note:empty { display: none; }
 .date-row input:disabled, .date-row button:disabled { opacity: .45; }
+
+.segmented { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; background: var(--bg); border: 1px solid var(--line); border-radius: 12px; padding: 4px; }
+.segmented label { margin: 0; color: var(--text); }
+.segmented input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.segmented span { display: block; text-align: center; padding: 10px 4px; border-radius: 9px; font-weight: 600; font-size: 15px; }
+.segmented input:checked + span { background: var(--primary); color: var(--primary-ink); }
+.segmented input:focus-visible + span { outline: 2px solid var(--primary); outline-offset: 2px; }
+.s-hand { color: var(--s-paid); border-style: dashed; }

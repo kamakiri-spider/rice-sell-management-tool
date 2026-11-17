@@ -166,9 +166,12 @@ function itemLines(items, prices) {
 const itemsSummary = (items) => itemLines(items, data.settings.prices).map((l) => `${l.type}${l.size}kg×${l.count}`).join('・');
 const orderTotal = (o) => num(o.riceAmount) + num(o.shippingFee);
 
+// 受け渡し方法：'ship'＝佐川急便で配送、'hand'＝手渡し（送料なし・住所不要）
+const isHand = (o) => o.delivery === 'hand';
+
 function shipStatus(o) {
-  if (o.shipDate && o.shipDate <= today()) return { key: 'shipped', label: '発送済み' };
-  if (o.notifiedDate) return { key: 'preparing', label: '出荷準備中' };
+  if (o.shipDate && o.shipDate <= today()) return { key: 'shipped', label: isHand(o) ? 'お渡し済み' : '発送済み' };
+  if (o.notifiedDate) return { key: 'preparing', label: isHand(o) ? 'お渡し準備中' : '出荷準備中' };
   return { key: 'new', label: '総額未連絡' };
 }
 const payStatus = (o) => (o.paidDate ? { key: 'paid', label: '入金済み' } : { key: 'unpaid', label: '入金待ち' });
@@ -312,7 +315,7 @@ document.addEventListener('visibilitychange', () => {
 
 // ---------- 受注一覧 ----------
 const FILTERS = [
-  ['all', 'すべて'], ['new', '総額未連絡'], ['preparing', '出荷準備中'], ['shipped', '発送済み'],
+  ['all', 'すべて'], ['new', '総額未連絡'], ['preparing', '出荷準備中'], ['shipped', '発送・お渡し済み'],
   ['unpaid', '入金待ち'], ['paid', '入金済み'],
 ];
 
@@ -357,13 +360,14 @@ function renderOrderList() {
 function orderCard(o) {
   const c = customerById(o.customerId) || { name: '（削除された発注者）' };
   const ss = shipStatus(o), ps = payStatus(o);
-  const shipNote = o.shipDate && o.shipDate > today() ? `発送予定 ${fmtDate(o.shipDate)}` : o.shipDate ? `発送 ${fmtDate(o.shipDate)}` : '';
+  const verb = isHand(o) ? 'お渡し' : '発送';
+  const shipNote = o.shipDate && o.shipDate > today() ? `${verb}予定 ${fmtDate(o.shipDate)}` : o.shipDate ? `${verb} ${fmtDate(o.shipDate)}` : '';
   return `
     <button class="card order-card" data-action="open-order" data-id="${o.id}">
       <div class="row1"><span class="name">${esc(c.name)} 様</span><span class="amount">${yen(orderTotal(o))}${o.shippingPending ? '<small>＋送料</small>' : ''}</span></div>
       <div class="row2">${esc(c.prefecture || '')}　受注 ${fmtDate(o.orderDate)}${shipNote ? '　' + shipNote : ''}</div>
       <div class="row3">${esc(itemsSummary(o.items))}</div>
-      <div class="badges"><span class="badge s-${ss.key}">${ss.label}</span><span class="badge s-${ps.key}">${ps.label}</span>${!addressReady(c) ? '<span class="badge s-noaddr">住所未登録</span>' : ''}</div>
+      <div class="badges"><span class="badge s-${ss.key}">${ss.label}</span><span class="badge s-${ps.key}">${ps.label}</span>${isHand(o) ? '<span class="badge s-hand">手渡し</span>' : !addressReady(c) ? '<span class="badge s-noaddr">住所未登録</span>' : ''}</div>
     </button>`;
 }
 
@@ -376,7 +380,7 @@ function newDraft(id) {
   }
   return {
     id: null, orderDate: today(), notifiedDate: '', shipDate: '', paidDate: '',
-    items: emptyItems(), prices: { ...data.settings.prices }, shippingAuto: true, combine: true, shippingFee: 0, note: '',
+    items: emptyItems(), prices: { ...data.settings.prices }, delivery: 'ship', shippingAuto: true, combine: true, shippingFee: 0, note: '',
     custMode: data.customers.length ? '' : '__new',
     cust: { name: '', prefecture: '', postal: '', address: '', phone: '' },
   };
@@ -509,8 +513,18 @@ function renderOrderForm() {
         <label>都道府県<select data-cust="prefecture">${prefOptions(d.cust.prefecture)}</select></label>
         <label>ご住所<textarea data-cust="address" rows="2" placeholder="市区町村・番地・建物名">${esc(d.cust.address)}</textarea></label>
         ${phoneField('data-cust="phone"', d.cust.phone)}
+        ${isHand(d) ? '<p class="hint">手渡しの場合、住所は空のままで大丈夫です。</p>' : ''}
         ${d.custMode !== '__new' ? '<p class="hint">ここで変えた住所・連絡先は発注者情報にも反映されます。</p>' : ''}
       ` : ''}
+    </section>
+
+    <section class="panel">
+      <h2>受け渡し方法</h2>
+      <div class="segmented" role="radiogroup">
+        <label><input type="radio" name="delivery" data-input="delivery" value="ship" ${!isHand(d) ? 'checked' : ''}><span>🚚 配送（佐川急便）</span></label>
+        <label><input type="radio" name="delivery" data-input="delivery" value="hand" ${isHand(d) ? 'checked' : ''}><span>🤝 手渡し</span></label>
+      </div>
+      ${isHand(d) ? '<p class="hint">手渡しは送料なし・住所の入力は不要です。</p>' : ''}
     </section>
 
     <section class="panel">
@@ -535,17 +549,18 @@ function renderOrderForm() {
     <section class="panel">
       <h2>料金</h2>
       <div id="totals"></div>
+      ${isHand(d) ? '' : `
       <label class="check"><input type="checkbox" data-input="shippingAuto" ${d.shippingAuto ? 'checked' : ''}> 送料を自動計算（佐川急便・熊本発）</label>
       ${d.shippingAuto ? `<label class="check"><input type="checkbox" data-input="combine" ${d.combine !== false ? 'checked' : ''}> 袋をまとめて梱包する（一番安い箱の組み合わせ）</label>` : ''}
-      ${d.shippingAuto ? '' : `<label>送料（手入力）<input data-input="shippingFee" value="${num(d.shippingFee)}" inputmode="numeric"></label>`}
+      ${d.shippingAuto ? '' : `<label>送料（手入力）<input data-input="shippingFee" value="${num(d.shippingFee)}" inputmode="numeric"></label>`}`}
     </section>
 
     <section class="panel">
       <h2>日付・ステータス</h2>
       <div class="status-line" id="status-line"></div>
       ${dateField('orderDate', '受注日')}
-      ${dateField('notifiedDate', '総額連絡日', '先方に総額をお知らせした日 → 出荷準備中')}
-      ${dateField('shipDate', '発送日', '発送日を過ぎると → 発送済み')}
+      ${dateField('notifiedDate', '総額連絡日', `先方に総額をお知らせした日 → ${isHand(d) ? 'お渡し準備中' : '出荷準備中'}`)}
+      ${isHand(d) ? dateField('shipDate', 'お渡し日', 'お渡し日を過ぎると → お渡し済み') : dateField('shipDate', '発送日', '発送日を過ぎると → 発送済み')}
       ${dateField('paidDate', '入金確認日', '入力すると → 入金済み（それまでは入金待ち）')}
     </section>
 
@@ -579,6 +594,7 @@ function dateField(key, label, hint = '') {
 function computeDraft() {
   const d = view.draft;
   d.riceAmount = riceAmount(d.items, d.prices);
+  if (isHand(d)) { d.shippingFee = 0; d.shippingPending = false; return null; }
   const detail = shippingDetail(d.items, d.cust.prefecture, d.combine !== false);
   if (d.shippingAuto) d.shippingFee = detail && !detail.error ? detail.total : 0;
   d.shippingPending = !!shippingPendingReason(d);
@@ -594,8 +610,8 @@ function updateTotals() {
     el.innerHTML = `
       ${lines.length ? lines.map((l) => `<div class="tl"><span>${l.type} ${l.size}kg × ${l.count}袋</span><span>${yenJ(l.amount)}</span></div>`).join('') : '<div class="tl muted"><span>袋数を選んでください</span></div>'}
       <div class="tl sum"><span>お米代金</span><span>${yenJ(d.riceAmount)}</span></div>
-      ${d.shippingAuto ? shippingLinesHtml(detail, d.cust.prefecture) : ''}
-      <div class="tl sum"><span>送料</span><span>${d.shippingPending ? '未定' : yenJ(d.shippingFee)}</span></div>
+      ${!isHand(d) && d.shippingAuto ? shippingLinesHtml(detail, d.cust.prefecture) : ''}
+      <div class="tl sum"><span>送料</span><span>${isHand(d) ? 'なし（手渡し）' : d.shippingPending ? '未定' : yenJ(d.shippingFee)}</span></div>
       <div class="tl grand"><span>合計</span><span>${yenJ(d.riceAmount + num(d.shippingFee))}${d.shippingPending ? '<small>＋送料</small>' : ''}</span></div>`;
   }
   // 住所が入るまでは発送日、送料が決まるまでは総額連絡日を入れられない
@@ -606,7 +622,7 @@ function updateTotals() {
     box.querySelectorAll('input, button').forEach((b) => { b.disabled = locked && !hasValue; });
     box.querySelector('.lock-note').textContent = locked ? note : '';
   };
-  lockField('shipDate', !addressReady(d.cust), '都道府県とご住所を入れると、発送日を入力できます');
+  lockField('shipDate', !isHand(d) && !addressReady(d.cust), '都道府県とご住所を入れると、発送日を入力できます');
   lockField('notifiedDate', d.shippingPending, '送料が決まると、総額連絡日を入力できます');
   const sl = $('#status-line');
   if (sl) {
@@ -631,7 +647,7 @@ function validateDraft() {
   const noPrice = BAG_SIZES.find((s) => !num(d.prices[s]) && RICE_TYPES.some((t) => num(d.items[t.id][s])));
   if (noPrice) return `${noPrice}kgの価格が未設定です。設定で入力してください`;
   computeDraft();
-  if (d.shipDate && !addressReady(d.cust)) return '発送日を入れるには、都道府県とご住所を入力してください';
+  if (!isHand(d) && d.shipDate && !addressReady(d.cust)) return '発送日を入れるには、都道府県とご住所を入力してください';
   if (d.notifiedDate && d.shippingPending) return '総額連絡日を入れるには、送料が決まっている必要があります（都道府県を入力するか、送料を手入力）';
   return null;
 }
@@ -641,7 +657,7 @@ const addressReady = (c) => !!(c && c.prefecture && (c.address || '').trim());
 
 // 送料が決まっていない理由（決まっていれば空）
 function shippingPendingReason(d) {
-  if (!d.shippingAuto) return '';
+  if (isHand(d) || !d.shippingAuto) return '';
   if (!d.cust.prefecture) return '都道府県を入力すると送料を計算します';
   const detail = shippingDetail(d.items, d.cust.prefecture, d.combine !== false);
   if (!detail) return `${d.cust.prefecture}は送料の自動計算の対象外です。送料を手入力してください`;
@@ -654,7 +670,7 @@ function recalcPendingShipping(customer) {
   if (!customer?.prefecture) return 0;
   let n = 0;
   for (const o of data.orders) {
-    if (o.customerId !== customer.id || !o.shippingPending || !o.shippingAuto) continue;
+    if (o.customerId !== customer.id || isHand(o) || !o.shippingPending || !o.shippingAuto) continue;
     const detail = shippingDetail(o.items, customer.prefecture, o.combine !== false);
     if (!detail || detail.error) continue;
     o.shippingFee = detail.total;
@@ -675,10 +691,10 @@ async function saveDraft({ silent = false } = {}) {
     customer = data.customers.find((c) => c.name === name);
     if (customer && !confirm(`「${name}」さんは登録済みです。同じ方として登録しますか？`)) return false;
     if (!customer) { customer = { id: uid(), createdAt: Date.now() }; data.customers.push(customer); }
-    Object.assign(customer, { ...d.cust, name });
+    Object.assign(customer, { ...d.cust, name, delivery: d.delivery || 'ship' });
   } else {
     customer = customerById(d.custMode);
-    Object.assign(customer, { prefecture: d.cust.prefecture, postal: d.cust.postal, address: d.cust.address, phone: d.cust.phone });
+    Object.assign(customer, { prefecture: d.cust.prefecture, postal: d.cust.postal, address: d.cust.address, phone: d.cust.phone, delivery: d.delivery || 'ship' });
   }
   recalcPendingShipping(customer);
   const { custMode, cust, ...fields } = d;
@@ -705,12 +721,12 @@ function notifyText() {
     'ご注文内容と合計金額をお知らせいたします。',
     '',
     ...lines.map((l) => `・${l.type} ${l.size}kg × ${l.count}袋　${yenJ(l.amount)}`),
-    `・送料（佐川急便）　${yenJ(d.shippingFee)}`,
+    ...(isHand(d) ? [] : [`・送料（佐川急便）　${yenJ(d.shippingFee)}`]),
     '',
     `合計金額：${yenJ(d.riceAmount + num(d.shippingFee))}`,
     ...(st.bankInfo.trim() ? ['', '【お振込先】', st.bankInfo.trim()] : []),
     '',
-    '準備ができ次第、発送いたします。どうぞよろしくお願いいたします。',
+    isHand(d) ? 'お渡しの日時は、改めてご相談させてください。どうぞよろしくお願いいたします。' : '準備ができ次第、発送いたします。どうぞよろしくお願いいたします。',
     ...(st.issuer.name ? ['', st.issuer.name] : []),
   ].join('\n');
 }
@@ -1016,7 +1032,7 @@ app.addEventListener('click', async (e) => {
     case 'order-for': {
       go('order', { id: null });
       const c = customerById(el.dataset.id);
-      Object.assign(view.draft, { custMode: c.id, cust: { name: c.name, prefecture: c.prefecture || '', postal: c.postal || '', address: c.address || '', phone: c.phone || '' } });
+      Object.assign(view.draft, { custMode: c.id, delivery: c.delivery || 'ship', cust: { name: c.name, prefecture: c.prefecture || '', postal: c.postal || '', address: c.address || '', phone: c.phone || '' } });
       return render();
     }
     case 'save-customer': {
@@ -1100,8 +1116,10 @@ app.addEventListener('change', async (e) => {
     const c = customerById(el.value);
     d.cust = c ? { name: c.name, prefecture: c.prefecture || '', postal: c.postal || '', address: c.address || '', phone: c.phone || '' }
       : { name: '', prefecture: '', postal: '', address: '', phone: '' };
+    if (!d.id && c?.delivery) d.delivery = c.delivery; // 新規受注では前回の受け渡し方法を初期値に
     return render();
   }
+  if (el.dataset.input === 'delivery') { d.delivery = el.value; return render(); }
   if (el.dataset.input === 'shippingAuto') { d.shippingAuto = el.checked; return render(); }
   if (el.dataset.input === 'combine') { d.combine = el.checked; return updateTotals(); }
   if (['orderDate', 'notifiedDate', 'shipDate', 'paidDate'].includes(el.dataset.input)) { d[el.dataset.input] = el.value; return render(); }
