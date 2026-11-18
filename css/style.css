@@ -234,7 +234,10 @@ label.inline select { text-align: left; }
 .rc-detail td:nth-child(n+2), .rc-detail tfoot th:last-child { text-align: right; }
 .rc-detail thead th { background: #f1f1ec; }
 .rc-detail tfoot th:first-child { text-align: right; }
-.rc-issuer { margin-top: 24px; margin-left: auto; width: fit-content; min-width: 55%; font-size: 14px; }
+.rc-issuer { margin-top: 24px; margin-left: auto; width: fit-content; min-width: 55%; font-size: 14px; display: flex; align-items: center; gap: 14px; }
+.rc-pphoto { flex: none; width: 96px; height: 96px; object-fit: cover; border: 1px solid #ccc; }
+.shape-circle { border-radius: 50%; }
+.shape-square { border-radius: 8px; }
 .rc-issuer .name { font-size: 17px; font-weight: 700; margin-bottom: 2px; }
 
 @media print {
@@ -298,3 +301,13 @@ textarea[data-n="text"] { font-size: 15px; line-height: 1.6; }
 .panel .sub-h { margin-top: 14px; }
 .segmented.three { grid-template-columns: repeat(3, 1fr); }
 .warn.box .btn { margin-top: 8px; display: flex; }
+
+/* 生産者写真の調整 */
+.crop-view { position: relative; width: min(280px, 100%); aspect-ratio: 1; margin: 6px auto 12px; overflow: hidden; background: #222; touch-action: none; cursor: grab; box-shadow: 0 0 0 3px var(--primary); }
+.crop-view img { position: absolute; left: 0; top: 0; transform-origin: 0 0; max-width: none; user-select: none; -webkit-user-select: none; -webkit-user-drag: none; pointer-events: none; }
+.crop-actions { display: grid; grid-template-columns: 1fr 2fr; gap: 8px; margin-top: 4px; }
+.crop-view.shape-square { border-radius: 10px; }
+.pphoto-row { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
+.pphoto-preview { width: 84px; height: 84px; object-fit: cover; border: 1px solid var(--line); }
+input[type=range] { padding: 0; accent-color: var(--primary); }
+@media print { .rc-pphoto { width: 22mm; height: 22mm; } }

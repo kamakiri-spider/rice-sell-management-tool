@@ -5,7 +5,7 @@ import {
 import { Vault, eraseAll } from './vault.js';
 
 // アプリの版。更新のたびに sw.js の CACHE と一緒に上げます
-const APP_VERSION = '17';
+const APP_VERSION = '18';
 
 // ---------- ユーティリティ ----------
 const $ = (sel, el = document) => el.querySelector(sel);
@@ -58,6 +58,8 @@ function defaultData() {
       receiptPhoto: null, // { dataUrl, updatedAt } 領収書に入れる写真（端末内に暗号化して保存）
       receiptPhotoLayout: 'background', // 'background'＝全体にうすく / 'band'＝上部に帯
       receiptPhotoOpacity: 18, // 背景のときの濃さ（%）
+      producerPhoto: null, // { original, cropped, crop: { sx, sy, z }, updatedAt } 発行者名の横に入れる生産者写真
+      producerPhotoShape: 'circle', // 'circle'＝丸 / 'square'＝四角
       greeting: DEFAULT_GREETING,
       prices: Object.fromEntries(BAG_SIZES.map((s) => [s, 0])), // 設定画面で入力
       rates: clone(DEFAULT_RATES),
@@ -916,7 +918,7 @@ function receiptDefaults(o) {
 function renderReceipt() {
   const o = orderById(view.id);
   if (!o) return '<div class="empty">受注が見つかりません</div>';
-  if (!view.r) view.r = { photo: true, ...receiptDefaults(o), ...(o.receipt || {}) };
+  if (!view.r) view.r = { photo: true, pphoto: true, ...receiptDefaults(o), ...(o.receipt || {}) };
   const r = view.r;
   const st = data.settings;
   const photo = st.receiptPhoto && r.photo !== false ? st.receiptPhoto : null;
@@ -931,6 +933,7 @@ function renderReceipt() {
       <label>但し書き<textarea data-r="note" rows="2">${esc(r.note)}</textarea></label>
       ${st.receiptPhoto ? `<label class="check"><input type="checkbox" data-r-photo ${r.photo !== false ? 'checked' : ''}> 写真を入れる</label>`
         : '<p class="hint">「設定 → 領収書の写真」で、稲穂などの写真を入れられます。</p>'}
+      ${st.producerPhoto ? `<label class="check"><input type="checkbox" data-r-pphoto ${r.pphoto !== false ? 'checked' : ''}> 生産者写真を入れる</label>` : ''}
       ${!iss.name ? '<p class="warn">発行者情報が未入力です。「設定」から入力してください。</p>' : ''}
       ${!o.paidDate ? '<p class="warn">この受注はまだ入金確認日が入力されていません。</p>' : ''}
       ${o.shippingPending ? '<p class="warn">送料が未定です（発注者の住所が未登録）。金額に送料が含まれていません。</p>' : ''}
@@ -959,10 +962,13 @@ function renderReceipt() {
         <tfoot><tr><th colspan="3">合計</th><th>${yenJ(orderTotal(o))}</th></tr></tfoot>
       </table>
       <div class="rc-issuer">
-        <div class="name">${esc(iss.name)}</div>
-        ${iss.postal ? `<div>〒${esc(iss.postal)}</div>` : ''}
-        <div>${esc(iss.address).replace(/\n/g, '<br>')}</div>
-        ${iss.phone ? `<div>TEL ${esc(iss.phone)}</div>` : ''}
+        <div class="rc-issuer-text">
+          <div class="name">${esc(iss.name)}</div>
+          ${iss.postal ? `<div>〒${esc(iss.postal)}</div>` : ''}
+          <div>${esc(iss.address).replace(/\n/g, '<br>')}</div>
+          ${iss.phone ? `<div>TEL ${esc(iss.phone)}</div>` : ''}
+        </div>
+        ${st.producerPhoto && r.pphoto !== false ? `<img class="rc-pphoto shape-${st.producerPhotoShape === 'square' ? 'square' : 'circle'}" src="${st.producerPhoto.cropped}" alt="">` : ''}
       </div>
       </div>
     </div>`;
@@ -1044,6 +1050,35 @@ function renderSettings() {
       ${postalField('data-s="issuer.postal"', st.issuer.postal)}
       <label>住所<textarea data-s="issuer.address" rows="2">${esc(st.issuer.address)}</textarea></label>
       ${phoneField('data-s="issuer.phone"', st.issuer.phone)}
+    </section>
+
+    <section class="panel">
+      <h2>生産者写真（領収書の発行者名の横）</h2>
+      ${view.crop ? `
+        <p class="hint">枠の中に見えている部分が領収書に入ります。指でずらして位置を、2本指で広げる・下のつまみで大きさを調整してください。</p>
+        <div class="crop-view shape-${st.producerPhotoShape === 'square' ? 'square' : 'circle'}" id="crop-view"><img id="crop-img" src="${view.crop.src}" alt="" draggable="false"></div>
+        <label class="inline">大きさ<input type="range" id="crop-zoom" min="1" max="5" step="0.01" value="${view.crop.z}"></label>
+        <div class="crop-actions">
+          <button class="btn" data-action="crop-cancel">やめる</button>
+          <button class="btn primary" data-action="crop-save">この範囲で決定</button>
+        </div>
+      ` : st.producerPhoto ? `
+        <div class="pphoto-row">
+          <img class="pphoto-preview shape-${st.producerPhotoShape === 'square' ? 'square' : 'circle'}" src="${st.producerPhoto.cropped}" alt="生産者写真">
+          <div class="hint">${esc(fmtDateJ(st.producerPhoto.updatedAt))}に設定</div>
+        </div>
+        <label class="inline">枠の形<select data-s="producerPhotoShape">
+          <option value="circle" ${st.producerPhotoShape !== 'square' ? 'selected' : ''}>丸</option>
+          <option value="square" ${st.producerPhotoShape === 'square' ? 'selected' : ''}>四角</option>
+        </select></label>
+        <button class="btn block" data-action="crop-edit">位置・大きさを調整</button>
+        <button class="btn block" data-action="pphoto-pick">写真を差し替える</button>
+        <button class="btn small ghost" data-action="pphoto-remove">写真を外す</button>
+      ` : `
+        <p class="hint">顔写真や作業風景など、生産者の写真を発行者名の横に入れられます。写真はこのiPhoneの中にだけ、暗号化して保存されます。</p>
+        <button class="btn block" data-action="pphoto-pick">📷 写真を選ぶ</button>
+      `}
+      <input type="file" id="pphoto-file" accept="image/*" hidden>
     </section>
 
     <section class="panel">
@@ -1201,6 +1236,88 @@ async function doErase() {
 // ---------- イベント ----------
 function afterRender() {
   if (view.name === 'order') updateTotals();
+  if (view.name === 'settings' && view.crop) setupCropper();
+}
+
+// 枠（正方形）の中で写真を動かす・拡大する
+// view.crop = { src, sx, sy, z }：sx, sy は枠の左上が写真のどこか（写真の幅・高さに対する割合）、z は拡大率（1＝枠いっぱい）
+function setupCropper() {
+  const box = $('#crop-view'), img = $('#crop-img'), zoom = $('#crop-zoom');
+  if (!box || !img) return;
+  const c = view.crop;
+  let V, w, h, s0, ox = 0, oy = 0;
+  const scale = () => s0 * c.z;
+  const apply = () => {
+    const s = scale();
+    ox = Math.min(0, Math.max(V - w * s, ox));
+    oy = Math.min(0, Math.max(V - h * s, oy));
+    img.style.transform = `translate(${ox}px, ${oy}px) scale(${s})`;
+    c.sx = -ox / s / w; c.sy = -oy / s / h;
+  };
+  // 枠の中のある点（px）を固定したまま拡大率を変える
+  const setZoom = (z, px = V / 2, py = V / 2) => {
+    const s = scale();
+    const ix = (px - ox) / s, iy = (py - oy) / s;
+    c.z = Math.min(5, Math.max(1, z));
+    ox = px - ix * scale(); oy = py - iy * scale();
+    apply();
+    if (zoom) zoom.value = c.z;
+  };
+  const start = () => {
+    V = box.clientWidth; w = img.naturalWidth; h = img.naturalHeight;
+    s0 = Math.max(V / w, V / h);
+    img.style.width = w + 'px'; img.style.height = h + 'px';
+    const s = scale();
+    if (c.sx == null) { ox = (V - w * s) / 2; oy = (V - h * s) / 2; } // 初めは中央
+    else { ox = -c.sx * w * s; oy = -c.sy * h * s; }
+    apply();
+  };
+  if (img.complete && img.naturalWidth) start(); else img.onload = start;
+
+  const pts = new Map();
+  let last = null; // { x, y, dist }
+  const center = () => { const a = [...pts.values()]; return { x: a.reduce((t, p) => t + p.x, 0) / a.length, y: a.reduce((t, p) => t + p.y, 0) / a.length }; };
+  const dist = () => { const [a, b] = [...pts.values()]; return b ? Math.hypot(a.x - b.x, a.y - b.y) : 0; };
+  const local = (e) => { const r = box.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; };
+  box.addEventListener('pointerdown', (e) => { try { box.setPointerCapture(e.pointerId); } catch { /* 取れなくても動かせる */ } pts.set(e.pointerId, local(e)); last = { ...center(), dist: dist() }; e.preventDefault(); });
+  box.addEventListener('pointermove', (e) => {
+    if (!pts.has(e.pointerId)) return;
+    pts.set(e.pointerId, local(e));
+    const cpos = center(), d = dist();
+    ox += cpos.x - last.x; oy += cpos.y - last.y;
+    if (d && last.dist) setZoom(c.z * d / last.dist, cpos.x, cpos.y); else apply();
+    last = { ...cpos, dist: d };
+    e.preventDefault();
+  });
+  const end = (e) => { pts.delete(e.pointerId); last = pts.size ? { ...center(), dist: dist() } : null; };
+  box.addEventListener('pointerup', end);
+  box.addEventListener('pointercancel', end);
+  // パソコンのホイールでも拡大縮小
+  box.addEventListener('wheel', (e) => { e.preventDefault(); const p = local(e); setZoom(c.z * (e.deltaY < 0 ? 1.08 : 1 / 1.08), p.x, p.y); }, { passive: false });
+  zoom?.addEventListener('input', () => setZoom(parseFloat(zoom.value)));
+}
+
+// 枠の中の部分を 480px 四方の画像にして保存
+async function saveCrop() {
+  const c = view.crop;
+  const img = $('#crop-img');
+  if (!img || !img.naturalWidth || c.sx == null) return;
+  const w = img.naturalWidth, h = img.naturalHeight;
+  const side = Math.min(w, h) / c.z; // 枠に入っている部分の一辺（写真のpx）
+  const cv = document.createElement('canvas');
+  cv.width = cv.height = 480;
+  const ctx = cv.getContext('2d');
+  ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, 480, 480);
+  ctx.drawImage(img, c.sx * w, c.sy * h, side, side, 0, 0, 480, 480);
+  const prev = data.settings.producerPhoto;
+  data.settings.producerPhoto = {
+    original: c.src,
+    cropped: cv.toDataURL('image/jpeg', 0.85),
+    crop: { sx: c.sx, sy: c.sy, z: c.z },
+    updatedAt: c.isNew || !prev ? today() : prev.updatedAt,
+  };
+  view.crop = null;
+  await persist(); render(); toast('生産者写真を設定しました');
 }
 
 app.addEventListener('click', async (e) => {
@@ -1276,6 +1393,19 @@ app.addEventListener('click', async (e) => {
       }
       return;
     case 'photo-pick': return $('#photo-file').click();
+    case 'pphoto-pick': return $('#pphoto-file').click();
+    case 'pphoto-remove':
+      if (!confirm('生産者写真を外しますか？')) return;
+      data.settings.producerPhoto = null;
+      await persist(); render(); toast('写真を外しました');
+      return;
+    case 'crop-edit': {
+      const pp = data.settings.producerPhoto;
+      view.crop = { src: pp.original, ...pp.crop, isNew: false };
+      return render();
+    }
+    case 'crop-cancel': view.crop = null; return render();
+    case 'crop-save': return saveCrop();
     case 'photo-remove':
       if (!confirm('領収書の写真を外しますか？')) return;
       data.settings.receiptPhoto = null;
@@ -1351,6 +1481,16 @@ app.addEventListener('change', async (e) => {
   const el = e.target;
   const d = view.draft;
   if (el.id === 'import-file') { if (el.files[0]) await doImport(el.files[0]); el.value = ''; return; }
+  if (el.id === 'pphoto-file') {
+    const file = el.files[0]; el.value = '';
+    if (!file) return;
+    try {
+      toast('写真を取り込んでいます…');
+      view.crop = { src: await shrinkPhoto(file), z: 1, isNew: true }; // 位置は中央から
+      render();
+    } catch (err) { toast(err.message || '写真を読み込めませんでした'); }
+    return;
+  }
   if (el.id === 'photo-file') {
     const file = el.files[0]; el.value = '';
     if (!file) return;
@@ -1377,9 +1517,10 @@ app.addEventListener('change', async (e) => {
   if (['orderDate', 'notifiedDate', 'shipDate', 'paidDate'].includes(el.dataset.input)) { d[el.dataset.input] = el.value; return render(); }
   if (el.dataset.r) { view.r[el.dataset.r] = el.value; return render(); }
   if ('rPhoto' in el.dataset) { view.r.photo = el.checked; return render(); }
+  if ('rPphoto' in el.dataset) { view.r.pphoto = el.checked; return render(); }
   if (el.dataset.s) {
     setPath(data.settings, el.dataset.s, 'num' in el.dataset ? num(el.value) : el.value);
-    if (el.dataset.s === 'receiptPhotoLayout') render();
+    if (el.dataset.s === 'receiptPhotoLayout' || el.dataset.s === 'producerPhotoShape') render();
     if (el.dataset.s === 'greeting') { const btn = $('[data-action="reset-greeting"]'); if (btn) btn.disabled = el.value === DEFAULT_GREETING; }
     await persist();
     toast('保存しました');
