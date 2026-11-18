@@ -5,7 +5,7 @@ import {
 import { Vault, eraseAll } from './vault.js';
 
 // アプリの版。更新のたびに sw.js の CACHE と一緒に上げます
-const APP_VERSION = '16';
+const APP_VERSION = '17';
 
 // ---------- ユーティリティ ----------
 const $ = (sel, el = document) => el.querySelector(sel);
@@ -55,6 +55,9 @@ function defaultData() {
       bankTransferInfo: '',
       defaultPayment: 'paypay', // 初めての方の支払い方法
       paymentSplitNotice: false,
+      receiptPhoto: null, // { dataUrl, updatedAt } 領収書に入れる写真（端末内に暗号化して保存）
+      receiptPhotoLayout: 'background', // 'background'＝全体にうすく / 'band'＝上部に帯
+      receiptPhotoOpacity: 18, // 背景のときの濃さ（%）
       greeting: DEFAULT_GREETING,
       prices: Object.fromEntries(BAG_SIZES.map((s) => [s, 0])), // 設定画面で入力
       rates: clone(DEFAULT_RATES),
@@ -913,9 +916,11 @@ function receiptDefaults(o) {
 function renderReceipt() {
   const o = orderById(view.id);
   if (!o) return '<div class="empty">受注が見つかりません</div>';
-  if (!view.r) view.r = { ...receiptDefaults(o), ...(o.receipt || {}) };
+  if (!view.r) view.r = { photo: true, ...receiptDefaults(o), ...(o.receipt || {}) };
   const r = view.r;
   const st = data.settings;
+  const photo = st.receiptPhoto && r.photo !== false ? st.receiptPhoto : null;
+  const layout = st.receiptPhotoLayout === 'band' ? 'band' : 'background';
   const lines = itemLines(o.items, o.prices);
   const iss = st.issuer;
   return `
@@ -924,6 +929,8 @@ function renderReceipt() {
       <label>宛名<input data-r="to" value="${esc(r.to)}"></label>
       <label>発行日<input type="date" data-r="date" value="${esc(r.date)}"></label>
       <label>但し書き<textarea data-r="note" rows="2">${esc(r.note)}</textarea></label>
+      ${st.receiptPhoto ? `<label class="check"><input type="checkbox" data-r-photo ${r.photo !== false ? 'checked' : ''}> 写真を入れる</label>`
+        : '<p class="hint">「設定 → 領収書の写真」で、稲穂などの写真を入れられます。</p>'}
       ${!iss.name ? '<p class="warn">発行者情報が未入力です。「設定」から入力してください。</p>' : ''}
       ${!o.paidDate ? '<p class="warn">この受注はまだ入金確認日が入力されていません。</p>' : ''}
       ${o.shippingPending ? '<p class="warn">送料が未定です（発注者の住所が未登録）。金額に送料が含まれていません。</p>' : ''}
@@ -932,7 +939,9 @@ function renderReceipt() {
         <button class="btn block" data-action="back-order">受注に戻る</button>
       </div>
     </section>
-    <div class="receipt-sheet">
+    <div class="receipt-sheet ${photo ? 'has-photo photo-' + layout : ''}">
+      ${photo ? `<img class="rc-photo op-${[10, 18, 28].includes(num(st.receiptPhotoOpacity)) ? num(st.receiptPhotoOpacity) : 18}" src="${photo.dataUrl}" alt="">` : ''}
+      <div class="rc-body">
       <div class="rc-head">
         <h1>領　収　書</h1>
         <div class="rc-meta">No. ${esc(o.receiptNo || '（発行時に採番）')}<br>${esc(fmtDateJ(r.date))}</div>
@@ -955,6 +964,7 @@ function renderReceipt() {
         <div>${esc(iss.address).replace(/\n/g, '<br>')}</div>
         ${iss.phone ? `<div>TEL ${esc(iss.phone)}</div>` : ''}
       </div>
+      </div>
     </div>`;
 }
 
@@ -968,6 +978,23 @@ async function doPrint() {
   await persist();
   render();
   setTimeout(() => window.print(), 50);
+}
+
+// 写真を長い辺 1600px の JPEG に縮小して data URL にする（データは外部に送らない）
+async function shrinkPhoto(file) {
+  const url = URL.createObjectURL(file);
+  try {
+    const img = new Image();
+    await new Promise((res, rej) => { img.onload = res; img.onerror = () => rej(new Error('この写真は読み込めませんでした')); img.src = url; });
+    const scale = Math.min(1, 1600 / Math.max(img.naturalWidth, img.naturalHeight));
+    const w = Math.round(img.naturalWidth * scale), h = Math.round(img.naturalHeight * scale);
+    const c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, w, h);
+    ctx.drawImage(img, 0, 0, w, h);
+    return c.toDataURL('image/jpeg', 0.82);
+  } finally { URL.revokeObjectURL(url); }
 }
 
 // ---------- 発注者 ----------
@@ -1017,6 +1044,27 @@ function renderSettings() {
       ${postalField('data-s="issuer.postal"', st.issuer.postal)}
       <label>住所<textarea data-s="issuer.address" rows="2">${esc(st.issuer.address)}</textarea></label>
       ${phoneField('data-s="issuer.phone"', st.issuer.phone)}
+    </section>
+
+    <section class="panel">
+      <h2>領収書の写真</h2>
+      ${st.receiptPhoto ? `
+        <img class="photo-preview" src="${st.receiptPhoto.dataUrl}" alt="領収書の写真">
+        <p class="hint">${esc(fmtDateJ(st.receiptPhoto.updatedAt))}に設定。毎年、新しい写真に差し替えられます。</p>
+        <label class="inline">入れ方<select data-s="receiptPhotoLayout">
+          <option value="background" ${st.receiptPhotoLayout !== 'band' ? 'selected' : ''}>背景全体にうすく</option>
+          <option value="band" ${st.receiptPhotoLayout === 'band' ? 'selected' : ''}>上部に帯</option>
+        </select></label>
+        ${st.receiptPhotoLayout !== 'band' ? `<label class="inline">濃さ<select data-s="receiptPhotoOpacity" data-num>
+          ${[[10, 'うすい'], [18, 'ふつう'], [28, 'こい']].map(([v, l]) => `<option value="${v}" ${num(st.receiptPhotoOpacity) === v ? 'selected' : ''}>${l}</option>`).join('')}
+        </select></label>` : ''}
+        <button class="btn block" data-action="photo-pick">写真を差し替える</button>
+        <button class="btn small ghost" data-action="photo-remove">写真を外す</button>
+      ` : `
+        <p class="hint">稲穂や田んぼの写真を領収書に入れられます。写真はこのiPhoneの中にだけ、暗号化して保存されます。</p>
+        <button class="btn block" data-action="photo-pick">📷 写真を選ぶ</button>
+      `}
+      <input type="file" id="photo-file" accept="image/*" hidden>
     </section>
 
     <section class="panel">
@@ -1227,6 +1275,12 @@ app.addEventListener('click', async (e) => {
         await persist(); toast('削除しました'); go('customers');
       }
       return;
+    case 'photo-pick': return $('#photo-file').click();
+    case 'photo-remove':
+      if (!confirm('領収書の写真を外しますか？')) return;
+      data.settings.receiptPhoto = null;
+      await persist(); render(); toast('写真を外しました');
+      return;
     case 'dismiss-split':
       data.settings.paymentSplitNotice = false;
       await persist(); return render();
@@ -1297,6 +1351,16 @@ app.addEventListener('change', async (e) => {
   const el = e.target;
   const d = view.draft;
   if (el.id === 'import-file') { if (el.files[0]) await doImport(el.files[0]); el.value = ''; return; }
+  if (el.id === 'photo-file') {
+    const file = el.files[0]; el.value = '';
+    if (!file) return;
+    try {
+      toast('写真を取り込んでいます…');
+      data.settings.receiptPhoto = { dataUrl: await shrinkPhoto(file), updatedAt: today() };
+      await persist(); render(); toast('写真を設定しました。領収書の画面で確認できます');
+    } catch (err) { toast(err.message || '写真を読み込めませんでした'); }
+    return;
+  }
   if (el.dataset.input === 'custMode') {
     d.custMode = el.value;
     const c = customerById(el.value);
@@ -1312,8 +1376,10 @@ app.addEventListener('change', async (e) => {
   if (el.dataset.input === 'combine') { d.combine = el.checked; return updateTotals(); }
   if (['orderDate', 'notifiedDate', 'shipDate', 'paidDate'].includes(el.dataset.input)) { d[el.dataset.input] = el.value; return render(); }
   if (el.dataset.r) { view.r[el.dataset.r] = el.value; return render(); }
+  if ('rPhoto' in el.dataset) { view.r.photo = el.checked; return render(); }
   if (el.dataset.s) {
     setPath(data.settings, el.dataset.s, 'num' in el.dataset ? num(el.value) : el.value);
+    if (el.dataset.s === 'receiptPhotoLayout') render();
     if (el.dataset.s === 'greeting') { const btn = $('[data-action="reset-greeting"]'); if (btn) btn.disabled = el.value === DEFAULT_GREETING; }
     await persist();
     toast('保存しました');
