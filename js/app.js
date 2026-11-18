@@ -5,7 +5,7 @@ import {
 import { Vault, eraseAll } from './vault.js';
 
 // アプリの版。更新のたびに sw.js の CACHE と一緒に上げます
-const APP_VERSION = '18';
+const APP_VERSION = '19';
 
 // ---------- ユーティリティ ----------
 const $ = (sel, el = document) => el.querySelector(sel);
@@ -229,6 +229,7 @@ const payStatus = (o) => (o.paidDate ? { key: 'paid', label: '入金済み' } : 
 
 // ---------- 画面切り替え ----------
 function go(name, params = {}) {
+  if (data) flushSettingsSave();
   view = { name, ...params };
   render();
   window.scrollTo(0, 0);
@@ -337,8 +338,22 @@ async function doUnlock() {
   setTimeout(() => { btn.disabled = false; }, wait * 1000);
 }
 
+// 設定の欄は入力のたびに少し待ってから保存（iPhoneのSafariでは、ハイフンを自動で入れた欄で
+// 「入力完了」の合図が来ないことがあるため、それに頼らず保存する）
+let settingsTimer = null;
+function scheduleSettingsSave() {
+  clearTimeout(settingsTimer);
+  settingsTimer = setTimeout(() => { settingsTimer = null; persist(); }, 500);
+}
+async function flushSettingsSave() {
+  if (!settingsTimer) return saveChain;
+  clearTimeout(settingsTimer); settingsTimer = null;
+  return persist();
+}
+
 async function lockNow() {
   if (!data) return;
+  await flushSettingsSave();
   await saveChain;
   vault.lock();
   data = null;
@@ -361,7 +376,7 @@ function checkAutoLock() {
 setInterval(checkAutoLock, 15000);
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') checkAutoLock();
-  else lastActive = Math.min(lastActive, Date.now());
+  else { lastActive = Math.min(lastActive, Date.now()); if (data) flushSettingsSave(); } // アプリを閉じる前に保存
 });
 
 // ---------- 受注一覧 ----------
@@ -1179,6 +1194,7 @@ function setPath(obj, path, value) {
 }
 
 async function doExport() {
+  await flushSettingsSave();
   await saveChain;
   const text = await vault.exportBackup(data);
   const name = `rice-orders-backup-${today()}.json`;
@@ -1456,6 +1472,7 @@ app.addEventListener('input', (e) => {
   if (el.dataset.c) { d[el.dataset.c] = el.value; return; }
   if (el.dataset.r) { view.r[el.dataset.r] = el.value; return; }
   if (el.dataset.n === 'text') { view.text = el.value; const m = $('#notify-mail'); if (m) m.href = mailtoHref(el.value); return; }
+  if (el.dataset.s && data) { setPath(data.settings, el.dataset.s, 'num' in el.dataset ? num(el.value) : el.value); scheduleSettingsSave(); return; }
 });
 
 // 入力済みの郵便番号の欄をタップしたときも住所を調べる（空なら入れる・違えば置き換えボタンを出す）
