@@ -5,7 +5,7 @@ import {
 import { Vault, eraseAll } from './vault.js';
 
 // アプリの版。更新のたびに sw.js の CACHE と一緒に上げます
-const APP_VERSION = '20';
+const APP_VERSION = '21';
 
 // ---------- ユーティリティ ----------
 const $ = (sel, el = document) => el.querySelector(sel);
@@ -655,7 +655,7 @@ function prefOptions(selected) {
 }
 
 function renderOrderForm() {
-  if (!view.draft) view.draft = newDraft(view.id);
+  if (!view.draft) { view.draft = newDraft(view.id); view.draftSaved = view.id ? draftKey(view.draft) : draftKey(newDraft(null)); }
   const d = view.draft;
   const sorted = [...data.customers].sort((a, b) => a.name.localeCompare(b.name, 'ja'));
   const showFields = d.custMode !== '';
@@ -850,7 +850,25 @@ function recalcPendingShipping(customer) {
   return n;
 }
 
+// 画面に表示されている日付・メモを下書きに読み直す（合図の取りこぼし対策）
+function syncDraftFromScreen() {
+  const d = view.draft;
+  if (!d || view.name !== 'order') return;
+  for (const k of ['orderDate', 'notifiedDate', 'shipDate', 'paidDate']) { const el = $(`[data-input="${k}"]`); if (el) d[k] = el.value; }
+  const note = $('[data-input="note"]'); if (note) d.note = note.value;
+}
+
+// 保存していない変更があるか（受注画面）
+const draftKey = (d) => JSON.stringify([d.custMode, d.cust, d.items, d.orderDate, d.notifiedDate, d.shipDate, d.paidDate,
+  d.delivery, d.payment, d.shippingAuto, d.combine, d.shippingAuto ? 0 : d.shippingFee, d.note]);
+function isDraftDirty() {
+  if (view.name !== 'order' || !view.draft) return false;
+  syncDraftFromScreen();
+  return draftKey(view.draft) !== view.draftSaved;
+}
+
 async function saveDraft({ silent = false } = {}) {
+  syncDraftFromScreen();
   const err = validateDraft();
   if (err) { toast(err); return false; }
   const d = view.draft;
@@ -874,6 +892,7 @@ async function saveDraft({ silent = false } = {}) {
   await persist();
   view.draft = newDraft(order.id);
   view.id = order.id;
+  view.draftSaved = draftKey(view.draft);
   if (!silent) toast('保存しました');
   return true;
 }
@@ -1422,6 +1441,11 @@ app.addEventListener('click', async (e) => {
     case 'lock': return lockNow();
     case 'tab': {
       const t = el.dataset.tab;
+      if (isDraftDirty()) {
+        if (confirm('この受注に保存していない変更があります。\n保存してから移動しますか？\n（「キャンセル」で変更を捨てて移動）')) {
+          if (!(await saveDraft())) return; // 保存できなければ移動しない（理由はお知らせに表示）
+        }
+      }
       return t === 'new' ? go('order', { id: null }) : go(t);
     }
     case 'filter': listFilter = el.dataset.filter; return render();
@@ -1542,6 +1566,8 @@ app.addEventListener('input', (e) => {
     return updateTotals();
   }
   if (el.dataset.input === 'note') { d.note = el.value; return; }
+  if (['orderDate', 'notifiedDate', 'shipDate', 'paidDate'].includes(el.dataset.input) && d) { d[el.dataset.input] = el.value; return updateTotals(); }
+  if (el.dataset.input === 'reportTo') { view.to = el.value || today(); return render(); }
   if (el.dataset.input === 'shippingFee') { d.shippingFee = num(el.value); return updateTotals(); }
   if (el.dataset.c) { d[el.dataset.c] = el.value; return; }
   if (el.dataset.r) { view.r[el.dataset.r] = el.value; return; }
