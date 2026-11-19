@@ -5,7 +5,7 @@ import {
 import { Vault, eraseAll } from './vault.js';
 
 // アプリの版。更新のたびに sw.js の CACHE と一緒に上げます
-const APP_VERSION = '22';
+const APP_VERSION = '23';
 
 // ---------- ユーティリティ ----------
 const $ = (sel, el = document) => el.querySelector(sel);
@@ -39,6 +39,8 @@ let listFilter = 'all';
 let listSearch = '';
 
 // 総額連絡メッセージのあいさつ文（設定で書き換え可。「元の文に戻す」でこれに戻る）
+// 領収書の明細表の下に入れるひと言（設定で書き換え可。「元の文に戻す」でこれに戻る）
+const DEFAULT_THANKS = '応援ありがとうございます！🙇‍♂️';
 const DEFAULT_GREETING = 'このたびは私の米づくりを応援いただき、誠にありがとうございます。\nご注文内容と合計金額をお知らせいたします。';
 // 以前の標準文のままなら、新しい標準文に置き換える（自分で書き換えた文はそのまま）
 const OLD_DEFAULT_GREETINGS = ['このたびは私たちの米づくりを応援いただき、誠にありがとうございます。\nご注文内容と合計金額をお知らせいたします。'];
@@ -61,6 +63,7 @@ function defaultData() {
       producerPhoto: null, // { original, cropped, crop: { sx, sy, z }, updatedAt } 発行者名の横に入れる生産者写真
       producerPhotoShape: 'circle', // 'circle'＝丸 / 'square'＝四角
       reportStart: '', // 入金集計の開始日（空ならその年の1月1日）
+      receiptThanks: DEFAULT_THANKS,
       greeting: DEFAULT_GREETING,
       prices: Object.fromEntries(BAG_SIZES.map((s) => [s, 0])), // 設定画面で入力
       rates: clone(DEFAULT_RATES),
@@ -1039,7 +1042,7 @@ function receiptDefaults(o) {
 function renderReceipt() {
   const o = orderById(view.id);
   if (!o) return '<div class="empty">受注が見つかりません</div>';
-  if (!view.r) view.r = { photo: true, pphoto: true, ...receiptDefaults(o), ...(o.receipt || {}) };
+  if (!view.r) view.r = { photo: true, pphoto: true, thanks: true, ...receiptDefaults(o), ...(o.receipt || {}) };
   const r = view.r;
   const st = data.settings;
   const photo = st.receiptPhoto && r.photo !== false ? st.receiptPhoto : null;
@@ -1055,6 +1058,7 @@ function renderReceipt() {
       ${st.receiptPhoto ? `<label class="check"><input type="checkbox" data-r-photo ${r.photo !== false ? 'checked' : ''}> 写真を入れる</label>`
         : '<p class="hint">「設定 → 領収書の写真」で、稲穂などの写真を入れられます。</p>'}
       ${st.producerPhoto ? `<label class="check"><input type="checkbox" data-r-pphoto ${r.pphoto !== false ? 'checked' : ''}> 生産者写真を入れる</label>` : ''}
+      ${(st.receiptThanks || '').trim() ? `<label class="check"><input type="checkbox" data-r-thanks ${r.thanks !== false ? 'checked' : ''}> ひと言（${esc(st.receiptThanks.trim().split('\n')[0])}）を入れる</label>` : ''}
       ${!iss.name ? '<p class="warn">発行者情報が未入力です。「設定」から入力してください。</p>' : ''}
       ${!o.paidDate ? '<p class="warn">この受注はまだ入金確認日が入力されていません。</p>' : ''}
       ${o.shippingPending ? '<p class="warn">送料が未定です（発注者の住所が未登録）。金額に送料が含まれていません。</p>' : ''}
@@ -1082,6 +1086,7 @@ function renderReceipt() {
         </tbody>
         <tfoot><tr><th colspan="3">合計</th><th>${yenJ(orderTotal(o))}</th></tr></tfoot>
       </table>
+      ${r.thanks !== false && (st.receiptThanks || '').trim() ? `<p class="rc-thanks">${esc(st.receiptThanks.trim()).replace(/\n/g, '<br>')}</p>` : ''}
       <div class="rc-issuer">
         <div class="rc-issuer-text">
           <div class="name">${esc(iss.name)}</div>
@@ -1221,6 +1226,13 @@ function renderSettings() {
         <button class="btn block" data-action="photo-pick">📷 写真を選ぶ</button>
       `}
       <input type="file" id="photo-file" accept="image/*" hidden>
+    </section>
+
+    <section class="panel">
+      <h2>領収書のひと言（明細表の下）</h2>
+      <textarea data-s="receiptThanks" rows="2">${esc(st.receiptThanks)}</textarea>
+      <p class="hint">空にすると入りません。領収書ごとに外すこともできます。</p>
+      <button class="btn small" data-action="reset-thanks" ${st.receiptThanks === DEFAULT_THANKS ? 'disabled' : ''}>元の文に戻す</button>
     </section>
 
     <section class="panel">
@@ -1555,6 +1567,10 @@ app.addEventListener('click', async (e) => {
     case 'dismiss-split':
       data.settings.paymentSplitNotice = false;
       await persist(); return render();
+    case 'reset-thanks':
+      data.settings.receiptThanks = DEFAULT_THANKS;
+      await persist(); render(); toast('ひと言を元に戻しました');
+      return;
     case 'reset-greeting':
       data.settings.greeting = DEFAULT_GREETING;
       await persist(); render(); toast('あいさつ文を元に戻しました');
@@ -1602,6 +1618,8 @@ app.addEventListener('input', (e) => {
   if (el.dataset.s && data) {
     setPath(data.settings, el.dataset.s, 'num' in el.dataset ? num(el.value) : el.value);
     scheduleSettingsSave();
+    if (el.dataset.s === 'receiptThanks') { const btn = $('[data-action="reset-thanks"]'); if (btn) btn.disabled = el.value === DEFAULT_THANKS; }
+    if (el.dataset.s === 'greeting') { const btn = $('[data-action="reset-greeting"]'); if (btn) btn.disabled = el.value === DEFAULT_GREETING; }
     if (el.dataset.s === 'reportStart') { const h = $('#report-start-hint'); if (h) h.textContent = `いま：${fmtDateJ(reportStart())}〜（終了日は集計画面で選べます。初めは今日）`; }
     return;
   }
@@ -1668,6 +1686,7 @@ app.addEventListener('change', async (e) => {
   if (el.dataset.r) { view.r[el.dataset.r] = el.value; return render(); }
   if ('rPhoto' in el.dataset) { view.r.photo = el.checked; return render(); }
   if ('rPphoto' in el.dataset) { view.r.pphoto = el.checked; return render(); }
+  if ('rThanks' in el.dataset) { view.r.thanks = el.checked; return render(); }
   if (el.dataset.s) {
     setPath(data.settings, el.dataset.s, 'num' in el.dataset ? num(el.value) : el.value);
     if (['receiptPhotoLayout', 'producerPhotoShape'].includes(el.dataset.s)) render();

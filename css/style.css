@@ -234,6 +234,8 @@ label.inline select { text-align: left; }
 .rc-detail td:nth-child(n+2), .rc-detail tfoot th:last-child { text-align: right; }
 .rc-detail thead th { background: #f1f1ec; }
 .rc-detail tfoot th:first-child { text-align: right; }
+.rc-thanks { margin: 14px 0 0; text-align: center; font-size: 17px; letter-spacing: .04em; color: #2f4a22;
+  font-family: "Hiragino Maru Gothic ProN", "Hiragino Maru Gothic Pro", "Hiragino Sans", sans-serif; }
 .rc-issuer { margin-top: 24px; margin-left: auto; width: fit-content; min-width: 55%; font-size: 14px; display: flex; align-items: center; gap: 14px; }
 .rc-pphoto { flex: none; width: 96px; height: 96px; object-fit: cover; border: 1px solid #ccc; }
 .shape-circle { border-radius: 50%; }
