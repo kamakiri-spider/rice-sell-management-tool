@@ -1,0 +1,9 @@
+/* 印刷：A4用紙に、A5の大きさの領収書（切り取り線つき） */
+@media print {
+  @page { size: A4 portrait; margin: 0; }
+  .receipt-print { width: 148mm; margin: 0 auto; padding-top: 8mm; }
+  .receipt-print .receipt-sheet {
+    width: 148mm; height: 210mm; padding: 8mm 10mm; box-sizing: border-box;
+    border: .3mm dashed #888; border-radius: 0;
+  }
+}

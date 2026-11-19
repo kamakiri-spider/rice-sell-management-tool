@@ -243,12 +243,25 @@ label.inline select { text-align: left; }
 .rc-issuer .name { font-size: 17px; font-weight: 700; margin-bottom: 2px; }
 
 @media print {
-  @page { size: A5 portrait; margin: 10mm; }
   html, body { background: #fff !important; }
   .no-print, #toast { display: none !important; }
   .content { padding: 0; max-width: none; }
   .receipt-sheet { border: 0; padding: 0; border-radius: 0; }
-  .photo-band .rc-photo { width: 100%; margin: 0 0 6mm; height: 32mm; }
+  /* 印刷では A5（148×210mm）に収まるよう、余白と文字を少し詰める */
+  .photo-band .rc-photo { width: 100%; margin: 0 0 3mm; height: 20mm; }
+  .rc-head h1 { font-size: 7mm; padding-bottom: 1mm; }
+  .rc-meta { font-size: 3mm; }
+  .rc-to { margin: 4mm 0 3mm; font-size: 4mm; padding-bottom: .8mm; }
+  .rc-to span { font-size: 5.2mm; }
+  .rc-amount { padding: 1.8mm 3.5mm; }
+  .rc-amount strong { font-size: 6.5mm; }
+  .rc-note { margin: 3mm 0 1mm; font-size: 3.4mm; padding-bottom: .8mm; }
+  .rc-received { font-size: 3.1mm; margin: 1mm 0 2.5mm; }
+  .rc-detail { font-size: 3mm; }
+  .rc-detail th, .rc-detail td { padding: .5mm 1.5mm; line-height: 1.35; }
+  .rc-thanks { margin: 2.5mm 0 0; font-size: 3.7mm; line-height: 1.45; }
+  .rc-issuer { margin-top: 2.5mm; font-size: 3.1mm; gap: 3.5mm; line-height: 1.4; }
+  .rc-issuer .name { font-size: 3.9mm; }
 }
 .rate-table th small { display: block; font-size: 11px; font-weight: 400; }
 .tl span:last-child { white-space: nowrap; }
@@ -312,7 +325,7 @@ textarea[data-n="text"] { font-size: 15px; line-height: 1.6; }
 .pphoto-row { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
 .pphoto-preview { width: 84px; height: 84px; object-fit: cover; border: 1px solid var(--line); }
 input[type=range] { padding: 0; accent-color: var(--primary); }
-@media print { .rc-pphoto { width: 22mm; height: 22mm; } }
+@media print { .rc-pphoto { width: 19mm; height: 19mm; } }
 
 /* 入金の集計 */
 .paid-card { padding: 12px 14px; }
@@ -334,3 +347,4 @@ input[type=range] { padding: 0; accent-color: var(--primary); }
 
 [hidden] { display: none !important; }
 .paid-card .pc-note { font-size: 12px; color: var(--warn); margin-top: 2px; }
+

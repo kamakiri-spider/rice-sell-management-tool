@@ -1,0 +1,4 @@
+/* 印刷：A5用紙に領収書 */
+@media print {
+  @page { size: A5 portrait; margin: 10mm; }
+}

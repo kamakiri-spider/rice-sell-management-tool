@@ -5,7 +5,7 @@ import {
 import { Vault, eraseAll } from './vault.js';
 
 // アプリの版。更新のたびに sw.js の CACHE と一緒に上げます
-const APP_VERSION = '23';
+const APP_VERSION = '24';
 
 // ---------- ユーティリティ ----------
 const $ = (sel, el = document) => el.querySelector(sel);
@@ -64,6 +64,7 @@ function defaultData() {
       producerPhotoShape: 'circle', // 'circle'＝丸 / 'square'＝四角
       reportStart: '', // 入金集計の開始日（空ならその年の1月1日）
       receiptThanks: DEFAULT_THANKS,
+      receiptPaper: 'a4', // 'a4'＝A4用紙にA5の大きさ（切り取り線） / 'a5'＝A5用紙
       greeting: DEFAULT_GREETING,
       prices: Object.fromEntries(BAG_SIZES.map((s) => [s, 0])), // 設定画面で入力
       rates: clone(DEFAULT_RATES),
@@ -1046,6 +1047,7 @@ function renderReceipt() {
   const r = view.r;
   const st = data.settings;
   const photo = st.receiptPhoto && r.photo !== false ? st.receiptPhoto : null;
+  const paper = st.receiptPaper === 'a5' ? 'a5' : 'a4';
   const layout = st.receiptPhotoLayout === 'band' ? 'band' : 'background';
   const lines = itemLines(o.items, o.prices);
   const iss = st.issuer;
@@ -1059,6 +1061,12 @@ function renderReceipt() {
         : '<p class="hint">「設定 → 領収書の写真」で、稲穂などの写真を入れられます。</p>'}
       ${st.producerPhoto ? `<label class="check"><input type="checkbox" data-r-pphoto ${r.pphoto !== false ? 'checked' : ''}> 生産者写真を入れる</label>` : ''}
       ${(st.receiptThanks || '').trim() ? `<label class="check"><input type="checkbox" data-r-thanks ${r.thanks !== false ? 'checked' : ''}> ひと言（${esc(st.receiptThanks.trim().split('\n')[0])}）を入れる</label>` : ''}
+      <h2 class="sub-h">用紙</h2>
+      <div class="segmented" role="radiogroup">
+        <label><input type="radio" name="paper" data-input="paper" value="a4" ${paper === 'a4' ? 'checked' : ''}><span>A4（切り取り線）</span></label>
+        <label><input type="radio" name="paper" data-input="paper" value="a5" ${paper === 'a5' ? 'checked' : ''}><span>A5</span></label>
+      </div>
+      <p class="hint">${paper === 'a4' ? 'A4用紙の上にA5の大きさで印刷します。点線で切り取ってください。' : 'プリンターがA5用紙に対応しているときに選んでください。'}</p>
       ${!iss.name ? '<p class="warn">発行者情報が未入力です。「設定」から入力してください。</p>' : ''}
       ${!o.paidDate ? '<p class="warn">この受注はまだ入金確認日が入力されていません。</p>' : ''}
       ${o.shippingPending ? '<p class="warn">送料が未定です（発注者の住所が未登録）。金額に送料が含まれていません。</p>' : ''}
@@ -1067,6 +1075,7 @@ function renderReceipt() {
         <button class="btn block" data-action="back-order">受注に戻る</button>
       </div>
     </section>
+    <div class="receipt-print paper-${paper}">
     <div class="receipt-sheet ${photo ? 'has-photo photo-' + layout : ''}">
       ${photo ? `<img class="rc-photo op-${[10, 18, 28].includes(num(st.receiptPhotoOpacity)) ? num(st.receiptPhotoOpacity) : 18}" src="${photo.dataUrl}" alt="">` : ''}
       <div class="rc-body">
@@ -1097,6 +1106,7 @@ function renderReceipt() {
         ${st.producerPhoto && r.pphoto !== false ? `<img class="rc-pphoto shape-${st.producerPhotoShape === 'square' ? 'square' : 'circle'}" src="${st.producerPhoto.cropped}" alt="">` : ''}
       </div>
       </div>
+    </div>
     </div>`;
 }
 
@@ -1376,7 +1386,14 @@ async function doErase() {
 }
 
 // ---------- イベント ----------
+function setPaperCss() {
+  const link = $('#paper-css');
+  const href = `css/paper-${data?.settings.receiptPaper === 'a5' ? 'a5' : 'a4'}.css`;
+  if (link && link.getAttribute('href') !== href) link.setAttribute('href', href);
+}
+
 function afterRender() {
+  setPaperCss();
   if (view.name === 'order') updateTotals();
   if (view.name === 'settings' && view.crop) setupCropper();
 }
@@ -1687,6 +1704,7 @@ app.addEventListener('change', async (e) => {
   if ('rPhoto' in el.dataset) { view.r.photo = el.checked; return render(); }
   if ('rPphoto' in el.dataset) { view.r.pphoto = el.checked; return render(); }
   if ('rThanks' in el.dataset) { view.r.thanks = el.checked; return render(); }
+  if (el.dataset.input === 'paper') { data.settings.receiptPaper = el.value; await persist(); return render(); }
   if (el.dataset.s) {
     setPath(data.settings, el.dataset.s, 'num' in el.dataset ? num(el.value) : el.value);
     if (['receiptPhotoLayout', 'producerPhotoShape'].includes(el.dataset.s)) render();
