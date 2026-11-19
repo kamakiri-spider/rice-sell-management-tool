@@ -5,7 +5,7 @@ import {
 import { Vault, eraseAll } from './vault.js';
 
 // アプリの版。更新のたびに sw.js の CACHE と一緒に上げます
-const APP_VERSION = '19';
+const APP_VERSION = '20';
 
 // ---------- ユーティリティ ----------
 const $ = (sel, el = document) => el.querySelector(sel);
@@ -60,6 +60,7 @@ function defaultData() {
       receiptPhotoOpacity: 18, // 背景のときの濃さ（%）
       producerPhoto: null, // { original, cropped, crop: { sx, sy, z }, updatedAt } 発行者名の横に入れる生産者写真
       producerPhotoShape: 'circle', // 'circle'＝丸 / 'square'＝四角
+      reportStart: '', // 入金集計の開始日（空ならその年の1月1日）
       greeting: DEFAULT_GREETING,
       prices: Object.fromEntries(BAG_SIZES.map((s) => [s, 0])), // 設定画面で入力
       rates: clone(DEFAULT_RATES),
@@ -238,12 +239,12 @@ function go(name, params = {}) {
 function render() {
   if (!data) return renderLock();
   document.body.classList.toggle('receipt-mode', view.name === 'receipt');
-  const titles = { orders: '受注一覧', order: view.id ? '受注の編集' : '新規受注', customers: '発注者', customer: '発注者の編集', settings: '設定', receipt: '領収書', notify: '総額連絡の確認' };
+  const titles = { orders: '受注一覧', order: view.id ? '受注の編集' : '新規受注', customers: '発注者', customer: '発注者の編集', settings: '設定', receipt: '領収書', notify: '総額連絡の確認', report: '入金の集計' };
   const main = {
     orders: renderOrders, order: renderOrderForm, customers: renderCustomers,
-    customer: renderCustomerForm, settings: renderSettings, receipt: renderReceipt, notify: renderNotify,
+    customer: renderCustomerForm, settings: renderSettings, receipt: renderReceipt, notify: renderNotify, report: renderReport,
   }[view.name]();
-  const tab = { orders: 'orders', order: view.id ? 'orders' : 'new', customers: 'customers', customer: 'customers', settings: 'settings', receipt: 'orders', notify: 'orders' }[view.name];
+  const tab = { orders: 'orders', order: view.id ? 'orders' : 'new', customers: 'customers', customer: 'customers', settings: 'settings', receipt: 'orders', notify: 'orders', report: 'orders' }[view.name];
   app.innerHTML = `
     <header class="topbar no-print">
       <h1>${esc(titles[view.name])}</h1>
@@ -401,6 +402,7 @@ function renderOrders() {
       <div><span class="label">出荷準備中</span><strong>${counts.preparing}件</strong></div>
       <div><span class="label">総額未連絡</span><strong>${counts.new}件</strong></div>
     </section>
+    ${renderPaidCard()}
     ${renderPreparingRice(counts.new)}
     <input class="search" type="search" placeholder="名前・住所・電話で検索" value="${esc(listSearch)}" data-input="search">
     <div class="chips">
@@ -408,6 +410,69 @@ function renderOrders() {
     </div>
     <div id="order-list">${renderOrderList()}</div>
   `;
+}
+
+// ---------- 入金の集計 ----------
+// 入金確認日が期間内（開始日〜終了日、両端を含む）の受注を「確定した入金」として集計
+const reportStart = () => data.settings.reportStart || `${today().slice(0, 4)}-01-01`;
+const paidInRange = (from, to) => data.orders.filter((o) => o.paidDate && o.paidDate >= from && o.paidDate <= to);
+const payLabel = (o) => (isHand(o) ? '現金・手渡し' : { paypay: 'PayPay', bank: '銀行振込', both: 'PayPayか銀行振込' }[paymentOf(o)]);
+
+function renderPaidCard() {
+  const from = reportStart(), to = today();
+  const paid = paidInRange(from, to);
+  const total = paid.reduce((a, o) => a + orderTotal(o), 0);
+  return `
+    <button class="card paid-card" data-action="open-report">
+      <div class="pc-label">確定した入金 <span>${fmtDate(from)}〜今日</span></div>
+      <div class="pc-row"><strong>${yen(total)}</strong><span>${paid.length}件 ›</span></div>
+    </button>`;
+}
+
+function renderReport() {
+  if (!view.to) view.to = today();
+  const from = reportStart(), to = view.to;
+  const paid = paidInRange(from, to).sort((a, b) => b.paidDate.localeCompare(a.paidDate));
+  const sum = (f) => paid.reduce((a, o) => a + f(o), 0);
+  const total = sum(orderTotal), rice = sum((o) => num(o.riceAmount)), ship = sum((o) => num(o.shippingFee));
+  const byPay = new Map();
+  for (const o of paid) { const k = payLabel(o); const v = byPay.get(k) || { n: 0, amount: 0 }; v.n++; v.amount += orderTotal(o); byPay.set(k, v); }
+  const kg = RICE_TYPES.map((t) => ({ name: t.name, kg: sum((o) => BAG_SIZES.reduce((a, sz) => a + sz * num(o.items?.[t.id]?.[sz]), 0)) }));
+  const unpaid = data.orders.filter((o) => !o.paidDate);
+  const range = from > to ? '<p class="warn">終了日が開始日より前になっています。</p>' : '';
+  return `
+    <section class="panel">
+      <h2>集計期間（入金確認日）</h2>
+      <div class="period">
+        <div><span class="muted">開始</span><strong>${fmtDateJ(from)}</strong>
+          <button class="link" data-action="tab" data-tab="settings">設定で変更</button></div>
+        <label>終了<div class="date-row"><input type="date" data-input="reportTo" value="${esc(to)}">
+          <button class="btn small" data-action="report-today">今日</button></div></label>
+      </div>
+      ${range}
+    </section>
+
+    <section class="panel">
+      <div class="report-total"><span>確定した入金</span><strong>${yenJ(total)}</strong><span class="muted">${paid.length}件</span></div>
+      <div class="tl"><span>お米代金</span><span>${yenJ(rice)}</span></div>
+      <div class="tl"><span>送料</span><span>${yenJ(ship)}</span></div>
+      <h2 class="sub-h">支払い方法別</h2>
+      ${byPay.size ? [...byPay].map(([k, v]) => `<div class="tl"><span>${esc(k)}（${v.n}件）</span><span>${yenJ(v.amount)}</span></div>`).join('') : '<p class="muted">この期間の入金はありません</p>'}
+      <h2 class="sub-h">お米の量</h2>
+      ${kg.map((k) => `<div class="tl"><span>${k.name}</span><span>${k.kg.toLocaleString('ja-JP')}kg</span></div>`).join('')}
+      ${unpaid.length ? `<p class="hint">参考：入金待ちが ${unpaid.length}件・${yenJ(unpaid.reduce((a, o) => a + orderTotal(o), 0))} あります（集計には含みません）。</p>` : ''}
+    </section>
+
+    ${paid.length ? `<h2 class="section-title">入金の明細</h2>
+    <div class="panel report-list">
+      ${paid.map((o) => {
+        const c = customerById(o.customerId) || { name: '（削除された発注者）' };
+        return `<button class="rl-row" data-action="open-order" data-id="${o.id}">
+          <span class="rl-date">${fmtDate(o.paidDate)}</span>
+          <span class="rl-name">${esc(c.name)} 様<small>${esc(payLabel(o))}</small></span>
+          <span class="rl-amount">${yenJ(orderTotal(o))}</span></button>`;
+      }).join('')}
+    </div>` : ''}`;
 }
 
 // 出荷準備中（お渡し準備中を含む）の受注に入っているお米の量を、精米・玄米ごとに集計
@@ -1125,6 +1190,13 @@ function renderSettings() {
     </section>
 
     <section class="panel">
+      <h2>入金の集計</h2>
+      <label>集計の開始日<small>この日以降の入金確認日を集計します。空のときはその年の1月1日です。</small>
+        <input type="date" data-s="reportStart" value="${esc(st.reportStart)}"></label>
+      <p class="hint">いま：${fmtDateJ(reportStart())}〜（終了日は集計画面で選べます。初めは今日）</p>
+    </section>
+
+    <section class="panel">
       <h2>お支払い先（総額連絡に記載・手渡しのときは載せません）</h2>
       ${st.paymentSplitNotice ? `<div class="warn box">以前の「お振込先」の内容を、PayPayと銀行振込の欄に自動で分けました。内容を確認してください。
         <button class="btn small" data-action="dismiss-split">確認しました</button></div>` : ''}
@@ -1408,6 +1480,8 @@ app.addEventListener('click', async (e) => {
         await persist(); toast('削除しました'); go('customers');
       }
       return;
+    case 'open-report': return go('report');
+    case 'report-today': view.to = today(); return render();
     case 'photo-pick': return $('#photo-file').click();
     case 'pphoto-pick': return $('#pphoto-file').click();
     case 'pphoto-remove':
@@ -1527,6 +1601,7 @@ app.addEventListener('change', async (e) => {
     if (!d.id) d.payment = c?.payment || data.settings.defaultPayment || 'paypay'; // 支払い方法も同様
     return render();
   }
+  if (el.dataset.input === 'reportTo') { view.to = el.value || today(); return render(); }
   if (el.dataset.input === 'delivery') { d.delivery = el.value; return render(); }
   if (el.dataset.input === 'payment') { d.payment = el.value; return render(); }
   if (el.dataset.input === 'shippingAuto') { d.shippingAuto = el.checked; return render(); }
@@ -1537,7 +1612,7 @@ app.addEventListener('change', async (e) => {
   if ('rPphoto' in el.dataset) { view.r.pphoto = el.checked; return render(); }
   if (el.dataset.s) {
     setPath(data.settings, el.dataset.s, 'num' in el.dataset ? num(el.value) : el.value);
-    if (el.dataset.s === 'receiptPhotoLayout' || el.dataset.s === 'producerPhotoShape') render();
+    if (['receiptPhotoLayout', 'producerPhotoShape', 'reportStart'].includes(el.dataset.s)) render();
     if (el.dataset.s === 'greeting') { const btn = $('[data-action="reset-greeting"]'); if (btn) btn.disabled = el.value === DEFAULT_GREETING; }
     await persist();
     toast('保存しました');

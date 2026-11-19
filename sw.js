@@ -1,5 +1,5 @@
 // オフラインでも使えるようにアプリ本体だけをキャッシュします（受注データは扱いません）
-const CACHE = 'rice-orders-v19'; // js/app.js の APP_VERSION と合わせる
+const CACHE = 'rice-orders-v20'; // js/app.js の APP_VERSION と合わせる
 const ASSETS = [
   './', './index.html', './css/style.css', './js/app.js', './js/data.js', './js/vault.js',
   './manifest.webmanifest', './icons/icon-180.png', './icons/icon-192.png', './icons/icon-512.png',

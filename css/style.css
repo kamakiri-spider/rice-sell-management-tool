@@ -311,3 +311,21 @@ textarea[data-n="text"] { font-size: 15px; line-height: 1.6; }
 .pphoto-preview { width: 84px; height: 84px; object-fit: cover; border: 1px solid var(--line); }
 input[type=range] { padding: 0; accent-color: var(--primary); }
 @media print { .rc-pphoto { width: 22mm; height: 22mm; } }
+
+/* 入金の集計 */
+.paid-card { padding: 12px 14px; }
+.paid-card .pc-label { font-size: 13px; color: var(--muted); }
+.paid-card .pc-label span { margin-left: 4px; }
+.paid-card .pc-row { display: flex; justify-content: space-between; align-items: baseline; }
+.paid-card .pc-row strong { font-size: 22px; color: var(--s-paid); font-variant-numeric: tabular-nums; }
+.paid-card .pc-row span { color: var(--muted); font-size: 14px; }
+.period > div { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+.period .link { margin: 0; }
+.report-total { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
+.report-total strong { font-size: 26px; color: var(--s-paid); font-variant-numeric: tabular-nums; }
+.report-list { padding: 4px 10px; }
+.rl-row { display: grid; grid-template-columns: 5.2em 1fr auto; gap: 8px; align-items: center; width: 100%; padding: 10px 2px; background: none; border: 0; border-bottom: 1px solid var(--line); text-align: left; color: var(--text); }
+.rl-row:last-child { border-bottom: 0; }
+.rl-date { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.rl-name small { display: block; font-size: 12px; color: var(--muted); }
+.rl-amount { font-weight: 700; font-variant-numeric: tabular-nums; }
