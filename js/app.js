@@ -5,7 +5,7 @@ import {
 import { Vault, eraseAll } from './vault.js';
 
 // アプリの版。更新のたびに sw.js の CACHE と一緒に上げます
-const APP_VERSION = '24';
+const APP_VERSION = '25';
 
 // ---------- ユーティリティ ----------
 const $ = (sel, el = document) => el.querySelector(sel);
@@ -1071,7 +1071,15 @@ function renderReceipt() {
       ${!o.paidDate ? '<p class="warn">この受注はまだ入金確認日が入力されていません。</p>' : ''}
       ${o.shippingPending ? '<p class="warn">送料が未定です（発注者の住所が未登録）。金額に送料が含まれていません。</p>' : ''}
       <div class="actions">
+        ${view.img ? `
+          <div class="img-preview">
+            <p class="hint">この画像を送ります。内容を確認してください。</p>
+            <img src="${view.img.url}" alt="領収書の画像">
+            <button class="btn primary block" data-action="image-share">📤 LINEなどで送る</button>
+            <button class="btn block ghost" data-action="image-close">閉じる</button>
+          </div>` : ''}
         <button class="btn primary block" data-action="print">🖨 印刷 / PDF保存</button>
+        <button class="btn block" data-action="image-make">🖼 画像にしてLINEなどで送る</button>
         <button class="btn block" data-action="back-order">受注に戻る</button>
       </div>
     </section>
@@ -1110,7 +1118,8 @@ function renderReceipt() {
     </div>`;
 }
 
-async function doPrint() {
+// 発行するとき（印刷・画像）に領収書番号を付け、内容を記録する
+async function issueReceipt() {
   const o = orderById(view.id);
   if (!o.receiptNo) {
     data.settings.receiptSeq = num(data.settings.receiptSeq) + 1;
@@ -1118,8 +1127,75 @@ async function doPrint() {
   }
   o.receipt = { ...view.r };
   await persist();
+  return o;
+}
+
+async function doPrint() {
+  await issueReceipt();
   render();
   setTimeout(() => window.print(), 50);
+}
+
+// ---------- 領収書を画像にする ----------
+// html2canvas（MIT、js/vendor に同梱）を必要なときだけ読み込む
+let h2cLoading = null;
+function loadHtml2canvas() {
+  if (window.html2canvas) return Promise.resolve(window.html2canvas);
+  h2cLoading ||= new Promise((resolve, reject) => {
+    const sc = document.createElement('script');
+    sc.src = 'js/vendor/html2canvas.min.js';
+    sc.onload = () => resolve(window.html2canvas);
+    sc.onerror = () => { h2cLoading = null; reject(new Error('画像を作る部品を読み込めませんでした')); };
+    document.head.appendChild(sc);
+  });
+  return h2cLoading;
+}
+
+async function makeReceiptImage() {
+  const o = await issueReceipt();
+  if (view.img) URL.revokeObjectURL(view.img.url);
+  view.img = null;
+  render();
+  toast('画像を作っています…');
+  try {
+    const h2c = await loadHtml2canvas();
+    const sheet = $('.receipt-sheet');
+    const canvas = await h2c(sheet, {
+      scale: 3, backgroundColor: '#ffffff', logging: false,
+      // html2canvas は object-fit に対応していないので、写真は背景画像（cover）に置き換えて描く
+      onclone: (doc) => {
+        doc.querySelectorAll('.rc-photo').forEach((img) => {
+          const div = doc.createElement('div');
+          div.className = img.className;
+          div.style.backgroundImage = `url("${img.getAttribute('src')}")`;
+          div.style.backgroundSize = 'cover';
+          div.style.backgroundPosition = 'center';
+          img.replaceWith(div);
+        });
+      },
+    });
+    const blob = await new Promise((res) => canvas.toBlob(res, 'image/png'));
+    if (!blob) throw new Error('画像を作れませんでした');
+    const name = `領収書_${o.receiptNo}.png`;
+    view.img = { url: URL.createObjectURL(blob), file: new File([blob], name, { type: 'image/png' }), name };
+    render();
+    $('.img-preview')?.scrollIntoView({ block: 'start' });
+  } catch (err) {
+    toast(err.message || '画像を作れませんでした');
+  }
+}
+
+// 共有メニューはタップ直後に開く必要があるので、作った画像をすぐ渡す
+async function shareReceiptImage() {
+  const img = view.img;
+  if (!img) return;
+  try {
+    if (navigator.canShare?.({ files: [img.file] })) { await navigator.share({ files: [img.file] }); return; }
+  } catch (e) { if (e.name === 'AbortError') return; }
+  // 共有できない環境では画像を保存
+  const a = document.createElement('a');
+  a.href = img.url; a.download = img.name; a.click();
+  toast('画像を保存しました');
 }
 
 // 写真を長い辺 1600px の JPEG に縮小して data URL にする（データは外部に送らない）
@@ -1532,6 +1608,9 @@ app.addEventListener('click', async (e) => {
       }
       return;
     case 'print': return doPrint();
+    case 'image-make': return makeReceiptImage();
+    case 'image-share': return shareReceiptImage();
+    case 'image-close': URL.revokeObjectURL(view.img?.url); view.img = null; return render();
     case 'back-order': return go('order', { id: view.id });
     case 'new-customer': return go('customer', { id: null });
     case 'open-customer': return go('customer', { id: el.dataset.id });
@@ -1700,10 +1779,10 @@ app.addEventListener('change', async (e) => {
   if (el.dataset.input === 'shippingAuto') { d.shippingAuto = el.checked; return render(); }
   if (el.dataset.input === 'combine') { d.combine = el.checked; return updateTotals(); }
   if (['orderDate', 'notifiedDate', 'shipDate', 'paidDate'].includes(el.dataset.input)) { d[el.dataset.input] = el.value; return updateTotals(); }
-  if (el.dataset.r) { view.r[el.dataset.r] = el.value; return render(); }
-  if ('rPhoto' in el.dataset) { view.r.photo = el.checked; return render(); }
-  if ('rPphoto' in el.dataset) { view.r.pphoto = el.checked; return render(); }
-  if ('rThanks' in el.dataset) { view.r.thanks = el.checked; return render(); }
+  if (el.dataset.r) { view.r[el.dataset.r] = el.value; view.img = null; return render(); }
+  if ('rPhoto' in el.dataset) { view.img = null; view.r.photo = el.checked; return render(); }
+  if ('rPphoto' in el.dataset) { view.img = null; view.r.pphoto = el.checked; return render(); }
+  if ('rThanks' in el.dataset) { view.img = null; view.r.thanks = el.checked; return render(); }
   if (el.dataset.input === 'paper') { data.settings.receiptPaper = el.value; await persist(); return render(); }
   if (el.dataset.s) {
     setPath(data.settings, el.dataset.s, 'num' in el.dataset ? num(el.value) : el.value);
