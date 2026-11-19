@@ -329,3 +329,6 @@ input[type=range] { padding: 0; accent-color: var(--primary); }
 .rl-date { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .rl-name small { display: block; font-size: 12px; color: var(--muted); }
 .rl-amount { font-weight: 700; font-variant-numeric: tabular-nums; }
+
+[hidden] { display: none !important; }
+.paid-card .pc-note { font-size: 12px; color: var(--warn); margin-top: 2px; }

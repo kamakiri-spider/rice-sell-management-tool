@@ -5,7 +5,7 @@ import {
 import { Vault, eraseAll } from './vault.js';
 
 // アプリの版。更新のたびに sw.js の CACHE と一緒に上げます
-const APP_VERSION = '21';
+const APP_VERSION = '22';
 
 // ---------- ユーティリティ ----------
 const $ = (sel, el = document) => el.querySelector(sel);
@@ -422,15 +422,36 @@ function renderPaidCard() {
   const from = reportStart(), to = today();
   const paid = paidInRange(from, to);
   const total = paid.reduce((a, o) => a + orderTotal(o), 0);
+  const outside = data.orders.filter((o) => o.paidDate).length - paid.length;
   return `
     <button class="card paid-card" data-action="open-report">
       <div class="pc-label">確定した入金 <span>${fmtDate(from)}〜今日</span></div>
       <div class="pc-row"><strong>${yen(total)}</strong><span>${paid.length}件 ›</span></div>
+      ${outside ? `<div class="pc-note">入金済みのうち${outside}件は期間外のため含みません</div>` : ''}
     </button>`;
 }
 
 function renderReport() {
   if (!view.to) view.to = today();
+  return `
+    <section class="panel">
+      <h2>集計期間（入金確認日）</h2>
+      <div class="period">
+        <div><span class="muted">開始</span><strong>${fmtDateJ(reportStart())}</strong>
+          <button class="link" data-action="tab" data-tab="settings">設定で変更</button></div>
+        <label>終了<div class="date-row"><input type="date" data-input="reportTo" value="${esc(view.to)}">
+          <button class="btn small" data-action="report-today">今日</button></div></label>
+      </div>
+    </section>
+    <div id="report-body">${renderReportBody()}</div>`;
+}
+
+function updateReport() {
+  const body = $('#report-body');
+  if (body) body.innerHTML = renderReportBody();
+}
+
+function renderReportBody() {
   const from = reportStart(), to = view.to;
   const paid = paidInRange(from, to).sort((a, b) => b.paidDate.localeCompare(a.paidDate));
   const sum = (f) => paid.reduce((a, o) => a + f(o), 0);
@@ -439,19 +460,15 @@ function renderReport() {
   for (const o of paid) { const k = payLabel(o); const v = byPay.get(k) || { n: 0, amount: 0 }; v.n++; v.amount += orderTotal(o); byPay.set(k, v); }
   const kg = RICE_TYPES.map((t) => ({ name: t.name, kg: sum((o) => BAG_SIZES.reduce((a, sz) => a + sz * num(o.items?.[t.id]?.[sz]), 0)) }));
   const unpaid = data.orders.filter((o) => !o.paidDate);
-  const range = from > to ? '<p class="warn">終了日が開始日より前になっています。</p>' : '';
+  const allPaid = data.orders.filter((o) => o.paidDate);
+  const before = allPaid.filter((o) => o.paidDate < from).length, after = allPaid.filter((o) => o.paidDate > to).length;
+  const notes = [
+    from > to ? '<p class="warn">終了日が開始日より前になっています。</p>' : '',
+    before ? `<p class="warn">入金済みのうち ${before}件は、入金確認日が開始日（${fmtDateJ(from)}）より前のため含まれていません。開始日は「設定 → 入金の集計」で変えられます。</p>` : '',
+    after ? `<p class="hint">入金済みのうち ${after}件は、入金確認日が終了日より後のため含まれていません。</p>` : '',
+  ].join('');
   return `
-    <section class="panel">
-      <h2>集計期間（入金確認日）</h2>
-      <div class="period">
-        <div><span class="muted">開始</span><strong>${fmtDateJ(from)}</strong>
-          <button class="link" data-action="tab" data-tab="settings">設定で変更</button></div>
-        <label>終了<div class="date-row"><input type="date" data-input="reportTo" value="${esc(to)}">
-          <button class="btn small" data-action="report-today">今日</button></div></label>
-      </div>
-      ${range}
-    </section>
-
+    ${notes}
     <section class="panel">
       <div class="report-total"><span>確定した入金</span><strong>${yenJ(total)}</strong><span class="muted">${paid.length}件</span></div>
       <div class="tl"><span>お米代金</span><span>${yenJ(rice)}</span></div>
@@ -755,7 +772,7 @@ function dateField(key, label, hint = '') {
       <div class="date-row">
         <input type="date" data-input="${key}" value="${esc(v)}">
         <button class="btn small" data-action="date-today" data-key="${key}">今日</button>
-        ${v ? `<button class="btn small ghost" data-action="date-clear" data-key="${key}" aria-label="消去">✕</button>` : ''}
+        <button class="btn small ghost" data-action="date-clear" data-key="${key}" aria-label="消去" ${v ? '' : 'hidden'}>✕</button>
       </div>
       <p class="lock-note warn"></p>
     </div>`;
@@ -785,6 +802,11 @@ function updateTotals() {
       <div class="tl grand"><span>合計</span><span>${yenJ(d.riceAmount + num(d.shippingFee))}${d.shippingPending ? '<small>＋送料</small>' : ''}</span></div>`;
   }
   // 住所が入るまでは発送日、送料が決まるまでは総額連絡日を入れられない
+  // 日付の✕ボタンは、日付が入っているときだけ見せる
+  for (const k of ['orderDate', 'notifiedDate', 'shipDate', 'paidDate']) {
+    const x = $(`[data-action="date-clear"][data-key="${k}"]`);
+    if (x) x.hidden = !d[k];
+  }
   const lockField = (key, locked, note) => {
     const box = $(`[data-field="${key}"]`);
     if (!box) return;
@@ -1211,8 +1233,9 @@ function renderSettings() {
     <section class="panel">
       <h2>入金の集計</h2>
       <label>集計の開始日<small>この日以降の入金確認日を集計します。空のときはその年の1月1日です。</small>
-        <input type="date" data-s="reportStart" value="${esc(st.reportStart)}"></label>
-      <p class="hint">いま：${fmtDateJ(reportStart())}〜（終了日は集計画面で選べます。初めは今日）</p>
+        <div class="date-row"><input type="date" data-s="reportStart" value="${esc(st.reportStart)}">
+          <button class="btn small" data-action="reset-report-start">1月1日に戻す</button></div></label>
+      <p class="hint" id="report-start-hint">いま：${fmtDateJ(reportStart())}〜（終了日は集計画面で選べます。初めは今日）</p>
     </section>
 
     <section class="panel">
@@ -1505,7 +1528,11 @@ app.addEventListener('click', async (e) => {
       }
       return;
     case 'open-report': return go('report');
-    case 'report-today': view.to = today(); return render();
+    case 'reset-report-start':
+      data.settings.reportStart = '';
+      await persist(); render(); toast(`集計の開始日を${today().slice(0, 4)}年1月1日に戻しました`);
+      return;
+    case 'report-today': { view.to = today(); const i = $('[data-input="reportTo"]'); if (i) i.value = view.to; return updateReport(); }
     case 'photo-pick': return $('#photo-file').click();
     case 'pphoto-pick': return $('#pphoto-file').click();
     case 'pphoto-remove':
@@ -1567,12 +1594,17 @@ app.addEventListener('input', (e) => {
   }
   if (el.dataset.input === 'note') { d.note = el.value; return; }
   if (['orderDate', 'notifiedDate', 'shipDate', 'paidDate'].includes(el.dataset.input) && d) { d[el.dataset.input] = el.value; return updateTotals(); }
-  if (el.dataset.input === 'reportTo') { view.to = el.value || today(); return render(); }
+  if (el.dataset.input === 'reportTo') { view.to = el.value || today(); return updateReport(); }
   if (el.dataset.input === 'shippingFee') { d.shippingFee = num(el.value); return updateTotals(); }
   if (el.dataset.c) { d[el.dataset.c] = el.value; return; }
   if (el.dataset.r) { view.r[el.dataset.r] = el.value; return; }
   if (el.dataset.n === 'text') { view.text = el.value; const m = $('#notify-mail'); if (m) m.href = mailtoHref(el.value); return; }
-  if (el.dataset.s && data) { setPath(data.settings, el.dataset.s, 'num' in el.dataset ? num(el.value) : el.value); scheduleSettingsSave(); return; }
+  if (el.dataset.s && data) {
+    setPath(data.settings, el.dataset.s, 'num' in el.dataset ? num(el.value) : el.value);
+    scheduleSettingsSave();
+    if (el.dataset.s === 'reportStart') { const h = $('#report-start-hint'); if (h) h.textContent = `いま：${fmtDateJ(reportStart())}〜（終了日は集計画面で選べます。初めは今日）`; }
+    return;
+  }
 });
 
 // 入力済みの郵便番号の欄をタップしたときも住所を調べる（空なら入れる・違えば置き換えボタンを出す）
@@ -1627,18 +1659,18 @@ app.addEventListener('change', async (e) => {
     if (!d.id) d.payment = c?.payment || data.settings.defaultPayment || 'paypay'; // 支払い方法も同様
     return render();
   }
-  if (el.dataset.input === 'reportTo') { view.to = el.value || today(); return render(); }
+  if (el.dataset.input === 'reportTo') { view.to = el.value || today(); return updateReport(); }
   if (el.dataset.input === 'delivery') { d.delivery = el.value; return render(); }
   if (el.dataset.input === 'payment') { d.payment = el.value; return render(); }
   if (el.dataset.input === 'shippingAuto') { d.shippingAuto = el.checked; return render(); }
   if (el.dataset.input === 'combine') { d.combine = el.checked; return updateTotals(); }
-  if (['orderDate', 'notifiedDate', 'shipDate', 'paidDate'].includes(el.dataset.input)) { d[el.dataset.input] = el.value; return render(); }
+  if (['orderDate', 'notifiedDate', 'shipDate', 'paidDate'].includes(el.dataset.input)) { d[el.dataset.input] = el.value; return updateTotals(); }
   if (el.dataset.r) { view.r[el.dataset.r] = el.value; return render(); }
   if ('rPhoto' in el.dataset) { view.r.photo = el.checked; return render(); }
   if ('rPphoto' in el.dataset) { view.r.pphoto = el.checked; return render(); }
   if (el.dataset.s) {
     setPath(data.settings, el.dataset.s, 'num' in el.dataset ? num(el.value) : el.value);
-    if (['receiptPhotoLayout', 'producerPhotoShape', 'reportStart'].includes(el.dataset.s)) render();
+    if (['receiptPhotoLayout', 'producerPhotoShape'].includes(el.dataset.s)) render();
     if (el.dataset.s === 'greeting') { const btn = $('[data-action="reset-greeting"]'); if (btn) btn.disabled = el.value === DEFAULT_GREETING; }
     await persist();
     toast('保存しました');
