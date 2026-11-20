@@ -55,7 +55,13 @@ async function decrypt(key, iv, ct) {
   return JSON.parse(td.decode(pt));
 }
 
-const b64 = (u8) => btoa(String.fromCharCode(...u8));
+// 大きなデータ（写真入り）でも失敗しないよう、少しずつ文字にしてから base64 にする
+// （一度に渡すと iPhone の Safari では約6万5千バイトを超えたところで失敗する）
+const b64 = (u8) => {
+  let s = '';
+  for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000));
+  return btoa(s);
+};
 const unb64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
 
 export class Vault {

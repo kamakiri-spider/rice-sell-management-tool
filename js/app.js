@@ -5,7 +5,7 @@ import {
 import { Vault, eraseAll } from './vault.js';
 
 // アプリの版。更新のたびに sw.js の CACHE と一緒に上げます
-const APP_VERSION = '26';
+const APP_VERSION = '27';
 
 // ---------- ユーティリティ ----------
 const $ = (sel, el = document) => el.querySelector(sel);
@@ -1404,7 +1404,13 @@ function renderSettings() {
     <section class="panel">
       <h2>バックアップ</h2>
       <p class="hint">機種変更や万一に備えて、ときどき書き出してください（ファイルも暗号化されています。読み込みには書き出し時のパスコードが必要です）。</p>
-      <button class="btn block" data-action="export">バックアップを書き出す</button>
+      ${view.backup ? `
+        <div class="backup-ready" id="backup-ready">
+          <p>✅ バックアップを作りました（${esc(view.backup.name)}・${Math.max(1, Math.round(view.backup.size / 1024)).toLocaleString('ja-JP')}KB）</p>
+          <button class="btn primary block" data-action="backup-share">📤 「ファイル」に保存・送る</button>
+          <p class="hint">共有メニューで「"ファイル"に保存」を選ぶと、iPhoneの「ファイル」アプリに残せます。</p>
+        </div>` : ''}
+      <button class="btn block" data-action="export">${view.backup ? 'バックアップを作り直す' : 'バックアップを書き出す'}</button>
       <button class="btn block" data-action="import">バックアップから復元</button>
       <input type="file" id="import-file" accept=".json,application/json" hidden>
     </section>
@@ -1428,20 +1434,37 @@ function setPath(obj, path, value) {
   o[last] = value;
 }
 
+// バックアップ：①ファイルを作る → ②タップで保存・共有（共有メニューはタップ直後でないと開けないため2段階）
 async function doExport() {
-  await flushSettingsSave();
-  await saveChain;
-  const text = await vault.exportBackup(data);
-  const name = `rice-orders-backup-${today()}.json`;
-  const file = new File([text], name, { type: 'application/json' });
   try {
-    if (navigator.canShare?.({ files: [file] })) { await navigator.share({ files: [file], title: name }); return; }
-  } catch (e) { if (e.name === 'AbortError') return; }
+    await flushSettingsSave();
+    await saveChain;
+    toast('バックアップを作っています…');
+    const text = await vault.exportBackup(data);
+    const name = `rice-orders-backup-${today()}.json`;
+    const file = new File([text], name, { type: 'application/json' });
+    if (view.backup) URL.revokeObjectURL(view.backup.url);
+    view.backup = { file, name, url: URL.createObjectURL(file), size: file.size };
+    render();
+    $('#backup-ready')?.scrollIntoView({ block: 'center' });
+  } catch (err) {
+    console.error(err);
+    toast('バックアップを作れませんでした：' + (err.message || err));
+  }
+}
+
+async function shareBackup() {
+  const b = view.backup;
+  if (!b) return;
+  try {
+    if (navigator.canShare?.({ files: [b.file] })) { await navigator.share({ files: [b.file] }); toast('バックアップを渡しました'); return; }
+  } catch (e) {
+    if (e.name === 'AbortError') return;
+  }
+  // 共有できない環境ではダウンロード
   const a = document.createElement('a');
-  a.href = URL.createObjectURL(file);
-  a.download = name;
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  a.href = b.url; a.download = b.name; a.click();
+  toast('バックアップを保存しました');
 }
 
 async function doImport(file) {
@@ -1725,6 +1748,7 @@ app.addEventListener('click', async (e) => {
       return;
     case 'change-pass': return doChangePass();
     case 'export': return doExport();
+    case 'backup-share': return shareBackup();
     case 'import': return $('#import-file').click();
     case 'erase': return doErase();
     case 'check-update': return checkUpdate(true);

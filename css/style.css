@@ -363,3 +363,6 @@ input[type=range] { padding: 0; accent-color: var(--primary); }
 .step-btn.step-ship { border-color: var(--s-packed); color: var(--s-packed); }
 #step-actions .step-btn { margin: 0 0 6px; font-size: 16px; }
 #step-actions:empty { display: none; }
+
+.backup-ready { border: 1.5px solid var(--s-paid); border-radius: 12px; padding: 10px 12px; margin-bottom: 10px; }
+.backup-ready p { margin: 0 0 8px; }
