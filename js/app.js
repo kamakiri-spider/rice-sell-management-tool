@@ -5,7 +5,7 @@ import {
 import { Vault, eraseAll } from './vault.js';
 
 // アプリの版。更新のたびに sw.js の CACHE と一緒に上げます
-const APP_VERSION = '25';
+const APP_VERSION = '26';
 
 // ---------- ユーティリティ ----------
 const $ = (sel, el = document) => el.querySelector(sel);
@@ -225,10 +225,20 @@ const paymentOf = (o) => o.payment || data.settings.defaultPayment || 'paypay';
 // 受け渡し方法：'ship'＝佐川急便で配送、'hand'＝手渡し（送料なし・住所不要）
 const isHand = (o) => o.delivery === 'hand';
 
+// 作業の段階：総額未連絡 → 未梱包（総額を連絡済み）→ 発送待ち（梱包済み）→ 発送済み
 function shipStatus(o) {
   if (o.shipDate && o.shipDate <= today()) return { key: 'shipped', label: isHand(o) ? 'お渡し済み' : '発送済み' };
-  if (o.notifiedDate) return { key: 'preparing', label: isHand(o) ? 'お渡し準備中' : '出荷準備中' };
+  if (o.packedDate) return { key: 'packed', label: isHand(o) ? 'お渡し待ち' : '発送待ち' };
+  if (o.notifiedDate) return { key: 'unpacked', label: '未梱包' };
   return { key: 'new', label: '総額未連絡' };
+}
+
+// 次の作業（ボタンに出す）。なければ null
+function nextStep(o) {
+  const st = shipStatus(o).key;
+  if (st === 'shipped') return null;
+  if (!o.packedDate) return { action: 'pack', label: '📦 梱包済みにする' };
+  return { action: 'ship', label: isHand(o) ? '🤝 お渡し済みにする' : '🚚 発送済みにする' };
 }
 const payStatus = (o) => (o.paidDate ? { key: 'paid', label: '入金済み' } : { key: 'unpaid', label: '入金待ち' });
 
@@ -386,7 +396,7 @@ document.addEventListener('visibilitychange', () => {
 
 // ---------- 受注一覧 ----------
 const FILTERS = [
-  ['all', 'すべて'], ['new', '総額未連絡'], ['preparing', '出荷準備中'], ['shipped', '発送・お渡し済み'],
+  ['all', 'すべて'], ['new', '総額未連絡'], ['unpacked', '未梱包'], ['packed', '発送・お渡し待ち'], ['shipped', '発送・お渡し済み'],
   ['unpaid', '入金待ち'], ['paid', '入金済み'],
 ];
 
@@ -403,8 +413,8 @@ function renderOrders() {
   return `
     <section class="summary">
       <div><span class="label">入金待ち</span><strong>${counts.unpaid}件</strong><span class="sub">${yen(unpaidAmount)}</span></div>
-      <div><span class="label">出荷準備中</span><strong>${counts.preparing}件</strong></div>
-      <div><span class="label">総額未連絡</span><strong>${counts.new}件</strong></div>
+      <div><span class="label">未梱包</span><strong>${counts.unpacked}件</strong></div>
+      <div><span class="label">発送待ち</span><strong>${counts.packed}件</strong></div>
     </section>
     ${renderPaidCard()}
     ${renderPreparingRice(counts.new)}
@@ -496,9 +506,9 @@ function renderReportBody() {
     </div>` : ''}`;
 }
 
-// 出荷準備中（お渡し準備中を含む）の受注に入っているお米の量を、精米・玄米ごとに集計
+// 未梱包（総額を連絡済みで、まだ梱包していない）の受注に入っているお米の量を、精米・玄米ごとに集計
 function renderPreparingRice(unnotifiedCount) {
-  const orders = data.orders.filter((o) => shipStatus(o).key === 'preparing');
+  const orders = data.orders.filter((o) => shipStatus(o).key === 'unpacked');
   if (!orders.length) return '';
   const rows = RICE_TYPES.map((t) => {
     const bags = BAG_SIZES.map((sz) => [sz, orders.reduce((a, o) => a + num(o.items?.[t.id]?.[sz]), 0)]);
@@ -508,8 +518,8 @@ function renderPreparingRice(unnotifiedCount) {
   });
   const totalKg = rows.reduce((a, r) => a + r.kg, 0);
   return `
-    <button class="card rice-stock" data-action="filter" data-filter="preparing">
-      <div class="rs-head"><span>出荷準備中のお米（${orders.length}件）</span><strong>合計 ${totalKg.toLocaleString('ja-JP')}kg</strong></div>
+    <button class="card rice-stock" data-action="filter" data-filter="unpacked">
+      <div class="rs-head"><span>梱包するお米（未梱包 ${orders.length}件）</span><strong>合計 ${totalKg.toLocaleString('ja-JP')}kg</strong></div>
       ${rows.map((r) => `
         <div class="rs-row">
           <span class="rs-type">${r.name}</span>
@@ -539,13 +549,17 @@ function orderCard(o) {
   const ss = shipStatus(o), ps = payStatus(o);
   const verb = isHand(o) ? 'お渡し' : '発送';
   const shipNote = o.shipDate && o.shipDate > today() ? `${verb}予定 ${fmtDate(o.shipDate)}` : o.shipDate ? `${verb} ${fmtDate(o.shipDate)}` : '';
+  const step = nextStep(o);
   return `
-    <button class="card order-card" data-action="open-order" data-id="${o.id}">
+    <div class="card order-card">
+    <button class="card-main" data-action="open-order" data-id="${o.id}">
       <div class="row1"><span class="name">${esc(c.name)} 様</span><span class="amount">${yen(orderTotal(o))}${o.shippingPending ? '<small>＋送料</small>' : ''}</span></div>
       <div class="row2">${[c.prefecture, `受注 ${fmtDate(o.orderDate)}`, shipNote].filter(Boolean).map(esc).join('　')}</div>
       <div class="row3">${esc(itemsSummary(o.items))}</div>
-      <div class="badges"><span class="badge s-${ss.key}">${ss.label}</span><span class="badge s-${ps.key}">${ps.label}</span>${isHand(o) ? '<span class="badge s-hand">手渡し</span>' : !addressReady(c) ? '<span class="badge s-noaddr">住所未登録</span>' : ''}</div>
-    </button>`;
+      <div class="badges"><span class="badge s-${ss.key}">${ss.label}</span><span class="badge s-${ps.key}">${ps.label}</span>${isHand(o) ? '<span class="badge s-hand">手渡し</span>' : !addressReady(c) ? '<span class="badge s-noaddr">住所未登録</span>' : ''}${!o.notifiedDate && ss.key === 'packed' ? '<span class="badge s-new">総額未連絡</span>' : ''}</div>
+    </button>
+    ${step ? `<div class="card-actions"><button class="btn small step-btn step-${step.action}" data-action="quick-step" data-id="${o.id}">${step.label}</button></div>` : ''}
+    </div>`;
 }
 
 // ---------- 受注フォーム ----------
@@ -556,7 +570,7 @@ function newDraft(id) {
     return { ...o, custMode: c.id ? c.id : '__new', cust: { name: c.name || '', prefecture: c.prefecture || '', postal: c.postal || '', address: c.address || '', phone: c.phone || '' } };
   }
   return {
-    id: null, orderDate: today(), notifiedDate: '', shipDate: '', paidDate: '',
+    id: null, orderDate: today(), notifiedDate: '', packedDate: '', shipDate: '', paidDate: '',
     items: emptyItems(), prices: { ...data.settings.prices }, delivery: 'ship', payment: data.settings.defaultPayment || 'paypay', shippingAuto: true, combine: true, shippingFee: 0, note: '',
     custMode: data.customers.length ? '' : '__new',
     cust: { name: '', prefecture: '', postal: '', address: '', phone: '' },
@@ -750,7 +764,9 @@ function renderOrderForm() {
       <h2>日付・ステータス</h2>
       <div class="status-line" id="status-line"></div>
       ${dateField('orderDate', '受注日')}
-      ${dateField('notifiedDate', '総額連絡日', `先方に総額をお知らせした日 → ${isHand(d) ? 'お渡し準備中' : '出荷準備中'}`)}
+      <div id="step-actions"></div>
+      ${dateField('notifiedDate', '総額連絡日', '先方に総額をお知らせした日 → 未梱包')}
+      ${dateField('packedDate', '梱包日', `梱包が終わった日 → ${isHand(d) ? 'お渡し待ち' : '発送待ち'}`)}
       ${isHand(d) ? dateField('shipDate', 'お渡し日', 'お渡し日を過ぎると → お渡し済み') : dateField('shipDate', '発送日', '発送日を過ぎると → 発送済み')}
       ${dateField('paidDate', '入金確認日', '入力すると → 入金済み（それまでは入金待ち）')}
     </section>
@@ -807,7 +823,7 @@ function updateTotals() {
   }
   // 住所が入るまでは発送日、送料が決まるまでは総額連絡日を入れられない
   // 日付の✕ボタンは、日付が入っているときだけ見せる
-  for (const k of ['orderDate', 'notifiedDate', 'shipDate', 'paidDate']) {
+  for (const k of ['orderDate', 'notifiedDate', 'packedDate', 'shipDate', 'paidDate']) {
     const x = $(`[data-action="date-clear"][data-key="${k}"]`);
     if (x) x.hidden = !d[k];
   }
@@ -824,6 +840,13 @@ function updateTotals() {
   if (sl) {
     const ss = shipStatus(d), ps = payStatus(d);
     sl.innerHTML = `<span class="badge s-${ss.key}">${ss.label}</span><span class="badge s-${ps.key}">${ps.label}</span>`;
+  }
+  const sa = $('#step-actions');
+  if (sa) {
+    const step = nextStep(d);
+    const blocked = step?.action === 'ship' && !isHand(d) && !addressReady(d.cust);
+    sa.innerHTML = step ? `<button class="btn block step-btn step-${step.action}" data-action="step-${step.action}" ${blocked ? 'disabled' : ''}>${step.label}</button>
+      ${blocked ? '<p class="warn">都道府県とご住所を入れると、発送済みにできます。</p>' : ''}` : '';
   }
 }
 
@@ -880,12 +903,12 @@ function recalcPendingShipping(customer) {
 function syncDraftFromScreen() {
   const d = view.draft;
   if (!d || view.name !== 'order') return;
-  for (const k of ['orderDate', 'notifiedDate', 'shipDate', 'paidDate']) { const el = $(`[data-input="${k}"]`); if (el) d[k] = el.value; }
+  for (const k of ['orderDate', 'notifiedDate', 'packedDate', 'shipDate', 'paidDate']) { const el = $(`[data-input="${k}"]`); if (el) d[k] = el.value; }
   const note = $('[data-input="note"]'); if (note) d.note = note.value;
 }
 
 // 保存していない変更があるか（受注画面）
-const draftKey = (d) => JSON.stringify([d.custMode, d.cust, d.items, d.orderDate, d.notifiedDate, d.shipDate, d.paidDate,
+const draftKey = (d) => JSON.stringify([d.custMode, d.cust, d.items, d.orderDate, d.notifiedDate, d.packedDate || '', d.shipDate, d.paidDate,
   d.delivery, d.payment, d.shippingAuto, d.combine, d.shippingAuto ? 0 : d.shippingFee, d.note]);
 function isDraftDirty() {
   if (view.name !== 'order' || !view.draft) return false;
@@ -1003,7 +1026,7 @@ function renderNotify() {
 async function afterNotified() {
   const o = orderById(view.id);
   if (!o || o.notifiedDate) return;
-  if (!confirm(`総額連絡日を今日にして「${isHand(o) ? 'お渡し準備中' : '出荷準備中'}」にしますか？`)) return;
+  if (!confirm('総額連絡日を今日にして「未梱包」にしますか？')) return;
   o.notifiedDate = today();
   o.updatedAt = Date.now();
   await persist();
@@ -1585,6 +1608,29 @@ app.addEventListener('click', async (e) => {
       return updateTotals();
     }
     case 'date-today': d[el.dataset.key] = today(); return render();
+    case 'step-pack':
+    case 'step-ship': {
+      const key = a === 'step-pack' ? 'packedDate' : 'shipDate';
+      d[key] = today();
+      const inp = $(`[data-input="${key}"]`); if (inp) inp.value = d[key]; // 保存前に画面の日付を読み直すので、画面にも入れる
+      if (await saveDraft({ silent: true })) { render(); toast(`「${shipStatus(view.draft).label}」にしました`); }
+      else d[key] = '';
+      return;
+    }
+    case 'quick-step': {
+      // 一覧から、その受注の次の作業を済ませる
+      const o = orderById(el.dataset.id);
+      const step = o && nextStep(o);
+      if (!step) return;
+      const c = customerById(o.customerId);
+      if (step.action === 'ship' && !isHand(o) && !addressReady(c)) return toast('住所が未登録です。受注を開いて都道府県とご住所を入れてください');
+      o[step.action === 'pack' ? 'packedDate' : 'shipDate'] = today();
+      o.updatedAt = Date.now();
+      await persist();
+      render();
+      toast(`${c?.name || ''} 様を「${shipStatus(o).label}」にしました`);
+      return;
+    }
     case 'date-clear': d[el.dataset.key] = ''; return render();
     case 'save-order': if (await saveDraft()) render(); return;
     case 'notify': return doNotify();
@@ -1705,7 +1751,7 @@ app.addEventListener('input', (e) => {
     return updateTotals();
   }
   if (el.dataset.input === 'note') { d.note = el.value; return; }
-  if (['orderDate', 'notifiedDate', 'shipDate', 'paidDate'].includes(el.dataset.input) && d) { d[el.dataset.input] = el.value; return updateTotals(); }
+  if (['orderDate', 'notifiedDate', 'packedDate', 'shipDate', 'paidDate'].includes(el.dataset.input) && d) { d[el.dataset.input] = el.value; return updateTotals(); }
   if (el.dataset.input === 'reportTo') { view.to = el.value || today(); return updateReport(); }
   if (el.dataset.input === 'shippingFee') { d.shippingFee = num(el.value); return updateTotals(); }
   if (el.dataset.c) { d[el.dataset.c] = el.value; return; }
@@ -1778,7 +1824,7 @@ app.addEventListener('change', async (e) => {
   if (el.dataset.input === 'payment') { d.payment = el.value; return render(); }
   if (el.dataset.input === 'shippingAuto') { d.shippingAuto = el.checked; return render(); }
   if (el.dataset.input === 'combine') { d.combine = el.checked; return updateTotals(); }
-  if (['orderDate', 'notifiedDate', 'shipDate', 'paidDate'].includes(el.dataset.input)) { d[el.dataset.input] = el.value; return updateTotals(); }
+  if (['orderDate', 'notifiedDate', 'packedDate', 'shipDate', 'paidDate'].includes(el.dataset.input)) { d[el.dataset.input] = el.value; return updateTotals(); }
   if (el.dataset.r) { view.r[el.dataset.r] = el.value; view.img = null; return render(); }
   if ('rPhoto' in el.dataset) { view.img = null; view.r.photo = el.checked; return render(); }
   if ('rPphoto' in el.dataset) { view.img = null; view.r.pphoto = el.checked; return render(); }
