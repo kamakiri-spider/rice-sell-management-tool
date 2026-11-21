@@ -5,7 +5,7 @@ import {
 import { Vault, eraseAll } from './vault.js';
 
 // アプリの版。更新のたびに sw.js の CACHE と一緒に上げます
-const APP_VERSION = '32';
+const APP_VERSION = '33';
 
 // ---------- ユーティリティ ----------
 const $ = (sel, el = document) => el.querySelector(sel);
@@ -403,18 +403,19 @@ document.addEventListener('visibilitychange', () => {
 // ---------- 受注一覧 ----------
 const FILTERS = [
   ['all', 'すべて'], ['new', '総額未連絡'], ['unpacked', '未梱包'], ['packed', '発送・お渡し待ち'], ['shipped', '発送・お渡し済み'],
-  ['unpaid', '入金待ち'], ['paid', '入金済み'],
+  ['unpaid', '入金待ち'], ['paid', '入金済み'], ['noreceipt', '領収書まだ（入金済み）'],
 ];
 
 function matchesFilter(o) {
   if (listFilter === 'all') return true;
   if (listFilter === 'unpaid' || listFilter === 'paid') return payStatus(o).key === listFilter;
+  if (listFilter === 'noreceipt') return !!o.paidDate && !receiptIssued(o);
   return shipStatus(o).key === listFilter;
 }
 
 function renderOrders() {
   const counts = Object.fromEntries(FILTERS.map(([k]) => [k, 0]));
-  for (const o of data.orders) { counts.all++; counts[shipStatus(o).key]++; counts[payStatus(o).key]++; }
+  for (const o of data.orders) { counts.all++; counts[shipStatus(o).key]++; counts[payStatus(o).key]++; if (o.paidDate && !receiptIssued(o)) counts.noreceipt++; }
   const unpaidAmount = data.orders.filter((o) => !o.paidDate).reduce((a, o) => a + orderTotal(o), 0);
   return `
     <section class="summary">
@@ -650,7 +651,7 @@ function orderCard(o) {
       <div class="row3">${esc(itemsSummary(o.items))}</div>
       ${isPackLater(o) ? `<div class="row-later">⏳ 発送予定が先のため、${esc(fmtDate(packFrom(o)))}から梱包の数に入ります</div>` : ''}
       ${ss.key === 'unpacked' && !isPackLater(o) && boxesOf(o) ? `<div class="row-box">📦 ${esc(boxesOf(o).map((b) => `${b.kg}kg箱×${b.count}（${b.desc}）`).join('・'))}</div>` : ''}
-      <div class="badges"><span class="badge s-${ss.key}">${ss.label}</span><span class="badge s-${ps.key}">${ps.label}</span>${isHand(o) ? '<span class="badge s-hand">手渡し</span>' : !addressReady(c) ? '<span class="badge s-noaddr">住所未登録</span>' : ''}${!o.notifiedDate && ss.key === 'packed' ? '<span class="badge s-new">総額未連絡</span>' : ''}</div>
+      <div class="badges"><span class="badge s-${ss.key}">${ss.label}</span><span class="badge s-${ps.key}">${ps.label}</span>${isHand(o) ? '<span class="badge s-hand">手渡し</span>' : !addressReady(c) ? '<span class="badge s-noaddr">住所未登録</span>' : ''}${!o.notifiedDate && ss.key === 'packed' ? '<span class="badge s-new">総額未連絡</span>' : ''}${receiptIssued(o) ? '<span class="badge s-receipt">🧾 領収書済</span>' : ''}</div>
     </button>
     ${step ? `<div class="card-actions"><button class="btn small step-btn step-${step.action}" data-action="quick-step" data-id="${o.id}">${step.label}</button></div>` : ''}
     </div>`;
@@ -873,7 +874,7 @@ function renderOrderForm() {
     <div class="actions">
       <button class="btn primary block" data-action="save-order">保存する</button>
       <button class="btn block" data-action="notify">💬 総額を連絡する（メッセージ作成）</button>
-      ${d.id ? `<button class="btn block" data-action="receipt">🧾 領収書を発行</button>` : ''}
+      ${d.id ? `<button class="btn block" data-action="receipt">${receiptIssued(d) ? `🧾 領収書を再発行（${esc(receiptLabel(d))}）` : '🧾 領収書を発行'}</button>` : ''}
       ${d.id ? `<button class="btn danger block" data-action="delete-order">この受注を削除</button>` : ''}
     </div>`;
 }
@@ -933,7 +934,7 @@ function updateTotals() {
   const sl = $('#status-line');
   if (sl) {
     const ss = shipStatus(d), ps = payStatus(d);
-    sl.innerHTML = `<span class="badge s-${ss.key}">${ss.label}</span><span class="badge s-${ps.key}">${ps.label}</span>`;
+    sl.innerHTML = `<span class="badge s-${ss.key}">${ss.label}</span><span class="badge s-${ps.key}">${ps.label}</span>${receiptIssued(d) ? '<span class="badge s-receipt">🧾 領収書済</span>' : ''}`;
   }
   const sa = $('#step-actions');
   if (sa) {
@@ -1172,6 +1173,7 @@ function renderReceipt() {
   const iss = st.issuer;
   return `
     <section class="panel no-print">
+      ${receiptIssued(o) ? `<p class="issued-note">🧾 この受注の領収書は発行済みです（${esc(receiptLabel(o))}${o.receiptLastAt && o.receiptLastAt !== o.receiptIssuedAt ? `、最後に出したのは${esc(fmtDate(o.receiptLastAt))}` : ''}）。もう一度出すと、同じ番号で再発行になります。</p>` : ''}
       <p class="hint">内容を確認・修正して「印刷 / PDF保存」を押してください。印刷画面で2本指で拡大するとPDFとして共有・保存できます。</p>
       <label>宛名<input data-r="to" value="${esc(r.to)}"></label>
       <label>発行日<input type="date" data-r="date" value="${esc(r.date)}"></label>
@@ -1245,9 +1247,15 @@ async function issueReceipt() {
     o.receiptNo = `${view.r.date.slice(0, 4)}-${String(data.settings.receiptSeq).padStart(4, '0')}`;
   }
   o.receipt = { ...view.r };
+  if (!o.receiptIssuedAt) o.receiptIssuedAt = today();
+  o.receiptLastAt = today();
   await persist();
   return o;
 }
+
+// 領収書を発行済みか（番号が付いていれば発行済み）
+const receiptIssued = (o) => !!o.receiptNo;
+const receiptLabel = (o) => `No. ${o.receiptNo}${o.receiptIssuedAt ? `・${fmtDate(o.receiptIssuedAt).replace(/^\d+\//, '')}発行` : ''}`;
 
 async function doPrint() {
   await issueReceipt();

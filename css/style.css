@@ -380,3 +380,6 @@ input[type=range] { padding: 0; accent-color: var(--primary); }
 
 .summary .sub.muted { color: var(--muted); }
 .order-card .row-later { font-size: 13px; color: var(--muted); margin-top: 2px; }
+
+.s-receipt { color: var(--s-shipped); border-style: dotted; }
+.issued-note { border: 1.5px solid var(--s-shipped); border-radius: 10px; padding: 8px 10px; font-size: 14px; margin: 0 0 10px; }
