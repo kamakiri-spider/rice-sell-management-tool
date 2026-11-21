@@ -10,16 +10,15 @@ permissions:
   pages: write
   id-token: write
 
+# 公開中の処理は途中で止めず、順番に公開する
 concurrency:
   group: pages
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
-  deploy:
+  # 1) 公開するファイルを集めてアップロード
+  build:
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
       - name: Collect site files
@@ -30,5 +29,14 @@ jobs:
       - uses: actions/upload-pages-artifact@v3
         with:
           path: _site
+
+  # 2) アップロードが終わってから公開（同じジョブで続けて行うと、アップロードが見つからず失敗することがある）
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
       - id: deployment
         uses: actions/deploy-pages@v4
