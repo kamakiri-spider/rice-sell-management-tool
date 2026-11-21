@@ -5,7 +5,7 @@ import {
 import { Vault, eraseAll } from './vault.js';
 
 // アプリの版。更新のたびに sw.js の CACHE と一緒に上げます
-const APP_VERSION = '30';
+const APP_VERSION = '31';
 
 // ---------- ユーティリティ ----------
 const $ = (sel, el = document) => el.querySelector(sel);
@@ -66,6 +66,7 @@ function defaultData() {
       receiptThanks: DEFAULT_THANKS,
       receiptPaper: 'a4', // 'a4'＝A4用紙にA5の大きさ（切り取り線） / 'a5'＝A5用紙
       boxStock: { 5: 0, 10: 0, 20: 0, 30: 0 }, // 手元にある箱の数（梱包済みにすると使った分を減らす）
+      bagStock: { 5: 0, 10: 0, 30: 0 }, // 手元にある袋の数（精米・玄米共通。梱包済みにすると使った分を減らす）
       greeting: DEFAULT_GREETING,
       prices: Object.fromEntries(BAG_SIZES.map((s) => [s, 0])), // 設定画面で入力
       rates: clone(DEFAULT_RATES),
@@ -519,27 +520,52 @@ function boxesOf(o) {
 }
 const boxesText = (list) => list.map((b) => `${b.kg}kg箱×${b.count}`).join('・');
 
-// 梱包済みになったら、その受注で使う箱を手元の数から減らす（実際に減らせた数を記録）
+// その受注で使う袋（精米・玄米の合計。手渡しでも使う）
+const bagsOf = (o) => BAG_SIZES.map((kg) => ({ kg, count: bagsBySize(o.items)[kg] })).filter((b) => b.count);
+const bagsText = (list) => list.map((b) => `${b.kg}kg袋×${b.count}`).join('・');
+
+// 梱包済みになったら、その受注で使う箱と袋を手元の数から減らす（実際に減らせた数を記録）
 // 梱包日を消して保存したら、記録した分を手元に戻す
 function adjustBoxStock(o, prevPacked) {
-  const stock = data.settings.boxStock;
-  if (!prevPacked && o.packedDate) {
+  const take = (stock, list) => {
     const used = [];
-    for (const b of boxesOf(o) || []) {
-      const take = Math.min(num(stock[b.kg]), b.count);
-      stock[b.kg] = num(stock[b.kg]) - take;
-      if (take) used.push({ kg: b.kg, count: take });
+    for (const b of list || []) {
+      const n = Math.min(num(stock[b.kg]), b.count);
+      stock[b.kg] = num(stock[b.kg]) - n;
+      if (n) used.push({ kg: b.kg, count: n });
     }
-    o.boxesUsed = used;
     return used;
+  };
+  const giveBack = (stock, list) => { for (const b of list || []) stock[b.kg] = num(stock[b.kg]) + b.count; };
+  const st = data.settings;
+  if (!prevPacked && o.packedDate) {
+    o.boxesUsed = take(st.boxStock, boxesOf(o));
+    o.bagsUsed = take(st.bagStock, bagsOf(o));
+    return { boxes: o.boxesUsed, bags: o.bagsUsed };
   }
   if (prevPacked && !o.packedDate) {
-    for (const b of o.boxesUsed || []) stock[b.kg] = num(stock[b.kg]) + b.count;
-    delete o.boxesUsed;
+    giveBack(st.boxStock, o.boxesUsed);
+    giveBack(st.bagStock, o.bagsUsed);
+    delete o.boxesUsed; delete o.bagsUsed;
   }
   return null;
 }
-const usedText = (used) => (used && used.length ? `（手元の箱 ${boxesText(used)} を使いました）` : '');
+const usedText = (used) => {
+  const parts = [used?.boxes?.length ? boxesText(used.boxes) : '', used?.bags?.length ? bagsText(used.bags) : ''].filter(Boolean);
+  return parts.length ? `（手元の ${parts.join('・')} を使いました）` : '';
+};
+
+// 「必要・手元・未購入」の3行
+function stockRows(label, unit, need, stock, sizes, text) {
+  const n = (list) => list.reduce((a, b) => a + b.count, 0);
+  if (!n(need)) return '';
+  const have = sizes.map((kg) => ({ kg, count: num(stock?.[kg]) })).filter((b) => b.count);
+  const lack = need.map((b) => ({ kg: b.kg, count: Math.max(0, b.count - num(stock?.[b.kg])) })).filter((b) => b.count);
+  return `
+    <div class="rs-row rs-boxes rs-first"><span class="rs-type">必要な${label}</span><span class="rs-kg">${n(need)}${unit}</span><span class="rs-detail">${text(need)}</span></div>
+    <div class="rs-row rs-boxes"><span class="rs-type">手元の${label}</span><span class="rs-kg">${n(have)}${unit}</span><span class="rs-detail">${have.length ? text(have) : '設定で入力できます'}</span></div>
+    <div class="rs-row rs-boxes rs-lack ${lack.length ? '' : 'ok'}"><span class="rs-type">未購入の${label}</span><span class="rs-kg">${n(lack)}${unit}</span><span class="rs-detail">${lack.length ? text(lack) : '足りています'}</span></div>`;
+}
 
 // 未梱包（総額を連絡済みで、まだ梱包していない）の受注に入っているお米の量を、精米・玄米ごとに集計
 function renderPreparingRice(unnotifiedCount) {
@@ -560,7 +586,6 @@ function renderPreparingRice(unnotifiedCount) {
     for (const b of list) boxCount.set(b.kg, (boxCount.get(b.kg) || 0) + b.count);
   }
   const boxes = [...boxCount].sort((a, b) => a[0] - b[0]).map(([kg, n]) => ({ kg, count: n }));
-  const boxTotal = boxes.reduce((a, b) => a + b.count, 0);
   return `
     <button class="card rice-stock" data-action="filter" data-filter="unpacked">
       <div class="rs-head"><span>梱包するお米（未梱包 ${orders.length}件）</span><strong>合計 ${totalKg.toLocaleString('ja-JP')}kg</strong></div>
@@ -570,16 +595,8 @@ function renderPreparingRice(unnotifiedCount) {
           <span class="rs-kg">${r.kg.toLocaleString('ja-JP')}kg</span>
           <span class="rs-detail">${r.detail || '—'}</span>
         </div>`).join('')}
-      ${boxTotal ? (() => {
-        const stock = data.settings.boxStock || {};
-        const have = [5, 10, 20, 30].map((kg) => ({ kg, count: num(stock[kg]) })).filter((b) => b.count);
-        const lack = boxes.map((b) => ({ kg: b.kg, count: Math.max(0, b.count - num(stock[b.kg])) })).filter((b) => b.count);
-        const n = (list) => list.reduce((a, b) => a + b.count, 0);
-        return `
-        <div class="rs-row rs-boxes rs-first"><span class="rs-type">必要な箱</span><span class="rs-kg">${boxTotal}個</span><span class="rs-detail">${boxesText(boxes)}</span></div>
-        <div class="rs-row rs-boxes"><span class="rs-type">手元の箱</span><span class="rs-kg">${n(have)}個</span><span class="rs-detail">${have.length ? boxesText(have) : '設定で入力できます'}</span></div>
-        <div class="rs-row rs-boxes rs-lack ${lack.length ? '' : 'ok'}"><span class="rs-type">未購入の箱</span><span class="rs-kg">${n(lack)}個</span><span class="rs-detail">${lack.length ? boxesText(lack) : '足りています'}</span></div>`;
-      })() : ''}
+      ${stockRows('袋', '枚', BAG_SIZES.map((kg) => ({ kg, count: orders.reduce((t, o) => t + bagsBySize(o.items)[kg], 0) })).filter((x) => x.count), data.settings.bagStock, BAG_SIZES, bagsText)}
+      ${stockRows('箱', '個', boxes, data.settings.boxStock, [5, 10, 20, 30], boxesText)}
       ${handN ? `<div class="rs-note">手渡しの${handN}件は箱なしで数えています</div>` : ''}
       ${unnotifiedCount ? `<div class="rs-note">総額未連絡の${unnotifiedCount}件は含みません</div>` : ''}
     </button>`;
@@ -1410,15 +1427,29 @@ function renderSettings() {
     </section>
 
     <section class="panel">
+      <h2>手元にある袋</h2>
+      <p class="hint">精米・玄米共通で数えます。買ってきたら数を足してください。梱包済みにすると、使った分が自動で減ります。</p>
+      ${BAG_SIZES.map((kg) => `
+        <div class="box-stock-row">
+          <span>${kg}kg袋</span>
+          <div class="stepper">
+            <button data-action="stock-step" data-kind="bagStock" data-kg="${kg}" data-delta="-1" aria-label="減らす">−</button>
+            <input data-s="bagStock.${kg}" data-num value="${num(st.bagStock?.[kg])}" inputmode="numeric">
+            <button data-action="stock-step" data-kind="bagStock" data-kg="${kg}" data-delta="1" aria-label="増やす">＋</button>
+          </div>
+        </div>`).join('')}
+    </section>
+
+    <section class="panel">
       <h2>手元にある箱</h2>
       <p class="hint">買ってきたら数を足してください。梱包済みにすると、使った分が自動で減ります。</p>
       ${[5, 10, 20, 30].map((kg) => `
         <div class="box-stock-row">
           <span>${kg}kg箱</span>
           <div class="stepper">
-            <button data-action="box-step" data-kg="${kg}" data-delta="-1" aria-label="減らす">−</button>
+            <button data-action="stock-step" data-kind="boxStock" data-kg="${kg}" data-delta="-1" aria-label="減らす">−</button>
             <input data-s="boxStock.${kg}" data-num value="${num(st.boxStock?.[kg])}" inputmode="numeric">
-            <button data-action="box-step" data-kg="${kg}" data-delta="1" aria-label="増やす">＋</button>
+            <button data-action="stock-step" data-kind="boxStock" data-kg="${kg}" data-delta="1" aria-label="増やす">＋</button>
           </div>
         </div>`).join('')}
     </section>
@@ -1712,11 +1743,11 @@ app.addEventListener('click', async (e) => {
       else d[key] = '';
       return;
     }
-    case 'box-step': {
-      const kg = el.dataset.kg;
-      const stock = data.settings.boxStock;
+    case 'stock-step': {
+      const { kind, kg } = el.dataset;
+      const stock = data.settings[kind];
       stock[kg] = Math.max(0, num(stock[kg]) + num(el.dataset.delta));
-      const inp = $(`[data-s="boxStock.${kg}"]`); if (inp) inp.value = stock[kg];
+      const inp = $(`[data-s="${kind}.${kg}"]`); if (inp) inp.value = stock[kg];
       scheduleSettingsSave();
       return;
     }
