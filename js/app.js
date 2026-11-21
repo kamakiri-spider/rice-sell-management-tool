@@ -5,7 +5,7 @@ import {
 import { Vault, eraseAll } from './vault.js';
 
 // アプリの版。更新のたびに sw.js の CACHE と一緒に上げます
-const APP_VERSION = '31';
+const APP_VERSION = '32';
 
 // ---------- ユーティリティ ----------
 const $ = (sel, el = document) => el.querySelector(sel);
@@ -18,6 +18,10 @@ const yen = (n) => '¥' + Math.round(n || 0).toLocaleString('ja-JP');
 const yenJ = (n) => Math.round(n || 0).toLocaleString('ja-JP') + '円';
 const pad = (n) => String(n).padStart(2, '0');
 const today = () => { const d = new Date(); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; };
+// 'YYYY-MM-DD' の日付どうしの差（日数）と、日数を足した日付
+const parseDate = (s) => { const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d); };
+const daysUntil = (s) => Math.round((parseDate(s) - parseDate(today())) / 86400000);
+const addDays = (s, n) => { const d = parseDate(s); d.setDate(d.getDate() + n); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; };
 const fmtDate = (s) => (s ? s.replace(/^(\d+)-(\d+)-(\d+)$/, (_, y, m, d) => `${y}/${+m}/${+d}`) : '');
 const fmtDateJ = (s) => (s ? s.replace(/^(\d+)-(\d+)-(\d+)$/, (_, y, m, d) => `${y}年${+m}月${+d}日`) : '');
 const uid = () => (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2));
@@ -415,7 +419,7 @@ function renderOrders() {
   return `
     <section class="summary">
       <div><span class="label">入金待ち</span><strong>${counts.unpaid}件</strong><span class="sub">${yen(unpaidAmount)}</span></div>
-      <div><span class="label">未梱包</span><strong>${counts.unpacked}件</strong></div>
+      <div><span class="label">未梱包</span><strong>${counts.unpacked}件</strong>${(() => { const n = data.orders.filter(isPackLater).length; return n ? `<span class="sub muted">うち先の予定 ${n}件</span>` : ''; })()}</div>
       <div><span class="label">発送待ち</span><strong>${counts.packed}件</strong></div>
     </section>
     ${renderPaidCard()}
@@ -567,10 +571,25 @@ function stockRows(label, unit, need, stock, sizes, text) {
     <div class="rs-row rs-boxes rs-lack ${lack.length ? '' : 'ok'}"><span class="rs-type">未購入の${label}</span><span class="rs-kg">${n(lack)}${unit}</span><span class="rs-detail">${lack.length ? text(lack) : '足りています'}</span></div>`;
 }
 
+// 発送予定が10日以上先の未梱包の受注は、まだ梱包しない（白米の酸化を防ぐ）ので梱包の数に入れない
+const PACK_AHEAD_DAYS = 10;
+const isPackLater = (o) => shipStatus(o).key === 'unpacked' && !!o.shipDate && daysUntil(o.shipDate) >= PACK_AHEAD_DAYS;
+const packFrom = (o) => addDays(o.shipDate, -(PACK_AHEAD_DAYS - 1)); // この日から梱包の数に入る
+
 // 未梱包（総額を連絡済みで、まだ梱包していない）の受注に入っているお米の量を、精米・玄米ごとに集計
 function renderPreparingRice(unnotifiedCount) {
-  const orders = data.orders.filter((o) => shipStatus(o).key === 'unpacked');
-  if (!orders.length) return '';
+  const unpacked = data.orders.filter((o) => shipStatus(o).key === 'unpacked');
+  const orders = unpacked.filter((o) => !isPackLater(o));
+  const laterN = unpacked.length - orders.length;
+  if (!unpacked.length) return '';
+  const laterNote = laterN ? `<div class="rs-note">発送予定が${PACK_AHEAD_DAYS}日以上先の${laterN}件は含みません</div>` : '';
+  if (!orders.length) {
+    return `
+    <button class="card rice-stock" data-action="filter" data-filter="unpacked">
+      <div class="rs-head"><span>梱包するお米</span><strong>いまはありません</strong></div>
+      ${laterNote}
+    </button>`;
+  }
   const rows = RICE_TYPES.map((t) => {
     const bags = BAG_SIZES.map((sz) => [sz, orders.reduce((a, o) => a + num(o.items?.[t.id]?.[sz]), 0)]);
     const kg = bags.reduce((a, [sz, n]) => a + sz * n, 0);
@@ -598,6 +617,7 @@ function renderPreparingRice(unnotifiedCount) {
       ${stockRows('袋', '枚', BAG_SIZES.map((kg) => ({ kg, count: orders.reduce((t, o) => t + bagsBySize(o.items)[kg], 0) })).filter((x) => x.count), data.settings.bagStock, BAG_SIZES, bagsText)}
       ${stockRows('箱', '個', boxes, data.settings.boxStock, [5, 10, 20, 30], boxesText)}
       ${handN ? `<div class="rs-note">手渡しの${handN}件は箱なしで数えています</div>` : ''}
+      ${laterNote}
       ${unnotifiedCount ? `<div class="rs-note">総額未連絡の${unnotifiedCount}件は含みません</div>` : ''}
     </button>`;
 }
@@ -628,7 +648,8 @@ function orderCard(o) {
       <div class="row1"><span class="name">${esc(c.name)} 様</span><span class="amount">${yen(orderTotal(o))}${o.shippingPending ? '<small>＋送料</small>' : ''}</span></div>
       <div class="row2">${[c.prefecture, `受注 ${fmtDate(o.orderDate)}`, shipNote].filter(Boolean).map(esc).join('　')}</div>
       <div class="row3">${esc(itemsSummary(o.items))}</div>
-      ${ss.key === 'unpacked' && boxesOf(o) ? `<div class="row-box">📦 ${esc(boxesOf(o).map((b) => `${b.kg}kg箱×${b.count}（${b.desc}）`).join('・'))}</div>` : ''}
+      ${isPackLater(o) ? `<div class="row-later">⏳ 発送予定が先のため、${esc(fmtDate(packFrom(o)))}から梱包の数に入ります</div>` : ''}
+      ${ss.key === 'unpacked' && !isPackLater(o) && boxesOf(o) ? `<div class="row-box">📦 ${esc(boxesOf(o).map((b) => `${b.kg}kg箱×${b.count}（${b.desc}）`).join('・'))}</div>` : ''}
       <div class="badges"><span class="badge s-${ss.key}">${ss.label}</span><span class="badge s-${ps.key}">${ps.label}</span>${isHand(o) ? '<span class="badge s-hand">手渡し</span>' : !addressReady(c) ? '<span class="badge s-noaddr">住所未登録</span>' : ''}${!o.notifiedDate && ss.key === 'packed' ? '<span class="badge s-new">総額未連絡</span>' : ''}</div>
     </button>
     ${step ? `<div class="card-actions"><button class="btn small step-btn step-${step.action}" data-action="quick-step" data-id="${o.id}">${step.label}</button></div>` : ''}
@@ -840,7 +861,7 @@ function renderOrderForm() {
       <div id="step-actions"></div>
       ${dateField('notifiedDate', '総額連絡日', '先方に総額をお知らせした日 → 未梱包')}
       ${dateField('packedDate', '梱包日', `梱包が終わった日 → ${isHand(d) ? 'お渡し待ち' : '発送待ち'}`)}
-      ${isHand(d) ? dateField('shipDate', 'お渡し日', 'お渡し日を過ぎると → お渡し済み') : dateField('shipDate', '発送日', '発送日を過ぎると → 発送済み')}
+      ${isHand(d) ? dateField('shipDate', 'お渡し日', `お渡し日を過ぎると → お渡し済み（${PACK_AHEAD_DAYS}日以上先の予定日なら、梱包の数にはまだ入りません）`) : dateField('shipDate', '発送日', `発送日を過ぎると → 発送済み（${PACK_AHEAD_DAYS}日以上先の予定日なら、梱包の数にはまだ入りません）`)}
       ${dateField('paidDate', '入金確認日', '入力すると → 入金済み（それまでは入金待ち）')}
     </section>
 

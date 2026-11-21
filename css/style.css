@@ -377,3 +377,6 @@ input[type=range] { padding: 0; accent-color: var(--primary); }
 
 .box-stock-row { display: flex; align-items: center; justify-content: space-between; padding: 4px 0; }
 .box-stock-row > span { font-weight: 600; }
+
+.summary .sub.muted { color: var(--muted); }
+.order-card .row-later { font-size: 13px; color: var(--muted); margin-top: 2px; }
