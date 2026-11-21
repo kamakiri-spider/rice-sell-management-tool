@@ -5,7 +5,7 @@ import {
 import { Vault, eraseAll } from './vault.js';
 
 // アプリの版。更新のたびに sw.js の CACHE と一緒に上げます
-const APP_VERSION = '29';
+const APP_VERSION = '30';
 
 // ---------- ユーティリティ ----------
 const $ = (sel, el = document) => el.querySelector(sel);
@@ -65,6 +65,7 @@ function defaultData() {
       reportStart: '', // 入金集計の開始日（空ならその年の1月1日）
       receiptThanks: DEFAULT_THANKS,
       receiptPaper: 'a4', // 'a4'＝A4用紙にA5の大きさ（切り取り線） / 'a5'＝A5用紙
+      boxStock: { 5: 0, 10: 0, 20: 0, 30: 0 }, // 手元にある箱の数（梱包済みにすると使った分を減らす）
       greeting: DEFAULT_GREETING,
       prices: Object.fromEntries(BAG_SIZES.map((s) => [s, 0])), // 設定画面で入力
       rates: clone(DEFAULT_RATES),
@@ -518,6 +519,28 @@ function boxesOf(o) {
 }
 const boxesText = (list) => list.map((b) => `${b.kg}kg箱×${b.count}`).join('・');
 
+// 梱包済みになったら、その受注で使う箱を手元の数から減らす（実際に減らせた数を記録）
+// 梱包日を消して保存したら、記録した分を手元に戻す
+function adjustBoxStock(o, prevPacked) {
+  const stock = data.settings.boxStock;
+  if (!prevPacked && o.packedDate) {
+    const used = [];
+    for (const b of boxesOf(o) || []) {
+      const take = Math.min(num(stock[b.kg]), b.count);
+      stock[b.kg] = num(stock[b.kg]) - take;
+      if (take) used.push({ kg: b.kg, count: take });
+    }
+    o.boxesUsed = used;
+    return used;
+  }
+  if (prevPacked && !o.packedDate) {
+    for (const b of o.boxesUsed || []) stock[b.kg] = num(stock[b.kg]) + b.count;
+    delete o.boxesUsed;
+  }
+  return null;
+}
+const usedText = (used) => (used && used.length ? `（手元の箱 ${boxesText(used)} を使いました）` : '');
+
 // 未梱包（総額を連絡済みで、まだ梱包していない）の受注に入っているお米の量を、精米・玄米ごとに集計
 function renderPreparingRice(unnotifiedCount) {
   const orders = data.orders.filter((o) => shipStatus(o).key === 'unpacked');
@@ -547,7 +570,16 @@ function renderPreparingRice(unnotifiedCount) {
           <span class="rs-kg">${r.kg.toLocaleString('ja-JP')}kg</span>
           <span class="rs-detail">${r.detail || '—'}</span>
         </div>`).join('')}
-      ${boxTotal ? `<div class="rs-row rs-boxes"><span class="rs-type">未購入の箱</span><span class="rs-kg">${boxTotal}個</span><span class="rs-detail">${boxesText(boxes)}</span></div>` : ''}
+      ${boxTotal ? (() => {
+        const stock = data.settings.boxStock || {};
+        const have = [5, 10, 20, 30].map((kg) => ({ kg, count: num(stock[kg]) })).filter((b) => b.count);
+        const lack = boxes.map((b) => ({ kg: b.kg, count: Math.max(0, b.count - num(stock[b.kg])) })).filter((b) => b.count);
+        const n = (list) => list.reduce((a, b) => a + b.count, 0);
+        return `
+        <div class="rs-row rs-boxes rs-first"><span class="rs-type">必要な箱</span><span class="rs-kg">${boxTotal}個</span><span class="rs-detail">${boxesText(boxes)}</span></div>
+        <div class="rs-row rs-boxes"><span class="rs-type">手元の箱</span><span class="rs-kg">${n(have)}個</span><span class="rs-detail">${have.length ? boxesText(have) : '設定で入力できます'}</span></div>
+        <div class="rs-row rs-boxes rs-lack ${lack.length ? '' : 'ok'}"><span class="rs-type">未購入の箱</span><span class="rs-kg">${n(lack)}個</span><span class="rs-detail">${lack.length ? boxesText(lack) : '足りています'}</span></div>`;
+      })() : ''}
       ${handN ? `<div class="rs-note">手渡しの${handN}件は箱なしで数えています</div>` : ''}
       ${unnotifiedCount ? `<div class="rs-note">総額未連絡の${unnotifiedCount}件は含みません</div>` : ''}
     </button>`;
@@ -958,10 +990,12 @@ async function saveDraft({ silent = false } = {}) {
     Object.assign(customer, { prefecture: d.cust.prefecture, postal: d.cust.postal, address: d.cust.address, phone: d.cust.phone, delivery: d.delivery || 'ship', ...(isHand(d) ? {} : { payment: paymentOf(d) }) });
   }
   recalcPendingShipping(customer);
+  const prevPacked = d.id ? orderById(d.id)?.packedDate || '' : '';
   const { custMode, cust, ...fields } = d;
   const order = { ...fields, customerId: customer.id, updatedAt: Date.now() };
   if (!order.id) { order.id = uid(); order.createdAt = Date.now(); data.orders.push(order); }
   else Object.assign(orderById(order.id), order);
+  view.lastBoxesUsed = adjustBoxStock(orderById(order.id), prevPacked);
   await persist();
   view.draft = newDraft(order.id);
   view.id = order.id;
@@ -1376,6 +1410,20 @@ function renderSettings() {
     </section>
 
     <section class="panel">
+      <h2>手元にある箱</h2>
+      <p class="hint">買ってきたら数を足してください。梱包済みにすると、使った分が自動で減ります。</p>
+      ${[5, 10, 20, 30].map((kg) => `
+        <div class="box-stock-row">
+          <span>${kg}kg箱</span>
+          <div class="stepper">
+            <button data-action="box-step" data-kg="${kg}" data-delta="-1" aria-label="減らす">−</button>
+            <input data-s="boxStock.${kg}" data-num value="${num(st.boxStock?.[kg])}" inputmode="numeric">
+            <button data-action="box-step" data-kg="${kg}" data-delta="1" aria-label="増やす">＋</button>
+          </div>
+        </div>`).join('')}
+    </section>
+
+    <section class="panel">
       <h2>入金の集計</h2>
       <label>集計の開始日<small>この日以降の入金確認日を集計します。空のときはその年の1月1日です。</small>
         <div class="date-row"><input type="date" data-s="reportStart" value="${esc(st.reportStart)}">
@@ -1660,8 +1708,16 @@ app.addEventListener('click', async (e) => {
       const key = a === 'step-pack' ? 'packedDate' : 'shipDate';
       d[key] = today();
       const inp = $(`[data-input="${key}"]`); if (inp) inp.value = d[key]; // 保存前に画面の日付を読み直すので、画面にも入れる
-      if (await saveDraft({ silent: true })) { render(); toast(`「${shipStatus(view.draft).label}」にしました`); }
+      if (await saveDraft({ silent: true })) { render(); toast(`「${shipStatus(view.draft).label}」にしました${a === 'step-pack' ? usedText(view.lastBoxesUsed) : ''}`); }
       else d[key] = '';
+      return;
+    }
+    case 'box-step': {
+      const kg = el.dataset.kg;
+      const stock = data.settings.boxStock;
+      stock[kg] = Math.max(0, num(stock[kg]) + num(el.dataset.delta));
+      const inp = $(`[data-s="boxStock.${kg}"]`); if (inp) inp.value = stock[kg];
+      scheduleSettingsSave();
       return;
     }
     case 'quick-step': {
@@ -1671,11 +1727,13 @@ app.addEventListener('click', async (e) => {
       if (!step) return;
       const c = customerById(o.customerId);
       if (step.action === 'ship' && !isHand(o) && !addressReady(c)) return toast('住所が未登録です。受注を開いて都道府県とご住所を入れてください');
+      const prevPacked = o.packedDate || '';
       o[step.action === 'pack' ? 'packedDate' : 'shipDate'] = today();
       o.updatedAt = Date.now();
+      const used = adjustBoxStock(o, prevPacked);
       await persist();
       render();
-      toast(`${c?.name || ''} 様を「${shipStatus(o).label}」にしました`);
+      toast(`${c?.name || ''} 様を「${shipStatus(o).label}」にしました${usedText(used)}`);
       return;
     }
     case 'date-clear': d[el.dataset.key] = ''; return render();
