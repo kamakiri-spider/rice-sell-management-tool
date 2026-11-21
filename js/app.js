@@ -5,7 +5,7 @@ import {
 import { Vault, eraseAll } from './vault.js';
 
 // アプリの版。更新のたびに sw.js の CACHE と一緒に上げます
-const APP_VERSION = '27';
+const APP_VERSION = '28';
 
 // ---------- ユーティリティ ----------
 const $ = (sel, el = document) => el.querySelector(sel);
@@ -506,6 +506,18 @@ function renderReportBody() {
     </div>` : ''}`;
 }
 
+// その受注で使う箱（佐川のサイズ → 5/10/20/30kg の箱）。送料の計算と同じ詰め方。手渡しは箱なしで null
+// 都道府県が未定のときは熊本県の運賃で詰め方を決める（箱の選び方はどの地域でもほぼ同じ）
+const boxKg = (size) => BOXES.find((b) => b.size === size)?.kg;
+function boxesOf(o) {
+  if (isHand(o)) return null;
+  const c = customerById(o.customerId) || {};
+  const detail = shippingDetail(o.items, regionOf(c.prefecture) ? c.prefecture : '熊本県', o.combine !== false);
+  if (!detail || detail.error) return null;
+  return detail.lines.map((l) => ({ kg: boxKg(l.box), count: l.count, desc: l.desc }));
+}
+const boxesText = (list) => list.map((b) => `${b.kg}kg箱×${b.count}`).join('・');
+
 // 未梱包（総額を連絡済みで、まだ梱包していない）の受注に入っているお米の量を、精米・玄米ごとに集計
 function renderPreparingRice(unnotifiedCount) {
   const orders = data.orders.filter((o) => shipStatus(o).key === 'unpacked');
@@ -517,6 +529,15 @@ function renderPreparingRice(unnotifiedCount) {
     return { name: t.name, kg, detail };
   });
   const totalKg = rows.reduce((a, r) => a + r.kg, 0);
+  const boxCount = new Map();
+  let handN = 0;
+  for (const o of orders) {
+    const list = boxesOf(o);
+    if (!list) { if (isHand(o)) handN++; continue; }
+    for (const b of list) boxCount.set(b.kg, (boxCount.get(b.kg) || 0) + b.count);
+  }
+  const boxes = [...boxCount].sort((a, b) => a[0] - b[0]).map(([kg, n]) => ({ kg, count: n }));
+  const boxTotal = boxes.reduce((a, b) => a + b.count, 0);
   return `
     <button class="card rice-stock" data-action="filter" data-filter="unpacked">
       <div class="rs-head"><span>梱包するお米（未梱包 ${orders.length}件）</span><strong>合計 ${totalKg.toLocaleString('ja-JP')}kg</strong></div>
@@ -526,6 +547,8 @@ function renderPreparingRice(unnotifiedCount) {
           <span class="rs-kg">${r.kg.toLocaleString('ja-JP')}kg</span>
           <span class="rs-detail">${r.detail || '—'}</span>
         </div>`).join('')}
+      ${boxTotal ? `<div class="rs-row rs-boxes"><span class="rs-type">箱</span><span class="rs-kg">${boxTotal}個</span><span class="rs-detail">${boxesText(boxes)}</span></div>` : ''}
+      ${handN ? `<div class="rs-note">手渡しの${handN}件は箱なしで数えています</div>` : ''}
       ${unnotifiedCount ? `<div class="rs-note">総額未連絡の${unnotifiedCount}件は含みません</div>` : ''}
     </button>`;
 }
@@ -556,6 +579,7 @@ function orderCard(o) {
       <div class="row1"><span class="name">${esc(c.name)} 様</span><span class="amount">${yen(orderTotal(o))}${o.shippingPending ? '<small>＋送料</small>' : ''}</span></div>
       <div class="row2">${[c.prefecture, `受注 ${fmtDate(o.orderDate)}`, shipNote].filter(Boolean).map(esc).join('　')}</div>
       <div class="row3">${esc(itemsSummary(o.items))}</div>
+      ${ss.key === 'unpacked' && boxesOf(o) ? `<div class="row-box">📦 ${esc(boxesOf(o).map((b) => `${b.kg}kg箱×${b.count}（${b.desc}）`).join('・'))}</div>` : ''}
       <div class="badges"><span class="badge s-${ss.key}">${ss.label}</span><span class="badge s-${ps.key}">${ps.label}</span>${isHand(o) ? '<span class="badge s-hand">手渡し</span>' : !addressReady(c) ? '<span class="badge s-noaddr">住所未登録</span>' : ''}${!o.notifiedDate && ss.key === 'packed' ? '<span class="badge s-new">総額未連絡</span>' : ''}</div>
     </button>
     ${step ? `<div class="card-actions"><button class="btn small step-btn step-${step.action}" data-action="quick-step" data-id="${o.id}">${step.label}</button></div>` : ''}

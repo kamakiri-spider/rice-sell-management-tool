@@ -366,3 +366,6 @@ input[type=range] { padding: 0; accent-color: var(--primary); }
 
 .backup-ready { border: 1.5px solid var(--s-paid); border-radius: 12px; padding: 10px 12px; margin-bottom: 10px; }
 .backup-ready p { margin: 0 0 8px; }
+
+.rice-stock .rs-boxes { border-top: 1px dashed var(--line); margin-top: 4px; padding-top: 6px; }
+.order-card .row-box { font-size: 13px; color: var(--s-unpacked); margin-top: 2px; }
