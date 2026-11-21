@@ -5,7 +5,7 @@ import {
 import { Vault, eraseAll } from './vault.js';
 
 // アプリの版。更新のたびに sw.js の CACHE と一緒に上げます
-const APP_VERSION = '33';
+const APP_VERSION = '34';
 
 // ---------- ユーティリティ ----------
 const $ = (sel, el = document) => el.querySelector(sel);
@@ -67,6 +67,8 @@ function defaultData() {
       producerPhoto: null, // { original, cropped, crop: { sx, sy, z }, updatedAt } 発行者名の横に入れる生産者写真
       producerPhotoShape: 'circle', // 'circle'＝丸 / 'square'＝四角
       reportStart: '', // 入金集計の開始日（空ならその年の1月1日）
+      backupNext: 'A', // 次に書き出すバックアップのファイル名（A と B を交互に使い、置き換えで2世代だけ残す）
+      backupLast: null, // { slot, at } 前回書き出したバックアップ
       receiptThanks: DEFAULT_THANKS,
       receiptPaper: 'a4', // 'a4'＝A4用紙にA5の大きさ（切り取り線） / 'a5'＝A5用紙
       boxStock: { 5: 0, 10: 0, 20: 0, 30: 0 }, // 手元にある箱の数（梱包済みにすると使った分を減らす）
@@ -1536,11 +1538,15 @@ function renderSettings() {
     <section class="panel">
       <h2>バックアップ</h2>
       <p class="hint">機種変更や万一に備えて、ときどき書き出してください（ファイルも暗号化されています。読み込みには書き出し時のパスコードが必要です）。</p>
+      <p class="backup-slot">
+        ファイル名は「…_A」と「…_B」を交互に使います。<b>今回は ${st.backupNext === 'B' ? 'B' : 'A'} に保存します</b>${st.backupLast ? `（前回：${esc(fmtDateTime(st.backupLast.at))} に ${esc(st.backupLast.slot)}）` : ''}。
+        <br>「ファイル」に保存するときに<b>「置き換え」</b>を選ぶと、最新とその1つ前の2つだけが残ります。
+      </p>
       ${view.backup ? `
         <div class="backup-ready" id="backup-ready">
-          <p>✅ バックアップを作りました（${esc(view.backup.name)}・${Math.max(1, Math.round(view.backup.size / 1024)).toLocaleString('ja-JP')}KB）</p>
+          <p>✅ バックアップを作りました（<b>${esc(view.backup.name)}</b>・${Math.max(1, Math.round(view.backup.size / 1024)).toLocaleString('ja-JP')}KB）</p>
           <button class="btn primary block" data-action="backup-share">📤 「ファイル」に保存・送る</button>
-          <p class="hint">共有メニューで「"ファイル"に保存」を選ぶと、iPhoneの「ファイル」アプリに残せます。</p>
+          <p class="hint">共有メニューで「"ファイル"に保存」を選び、前と同じ場所に保存してください。同じ名前のファイルがあれば「置き換え」を選びます。</p>
         </div>` : ''}
       <button class="btn block" data-action="export">${view.backup ? 'バックアップを作り直す' : 'バックアップを書き出す'}</button>
       <button class="btn block" data-action="import">バックアップから復元</button>
@@ -1573,10 +1579,11 @@ async function doExport() {
     await saveChain;
     toast('バックアップを作っています…');
     const text = await vault.exportBackup(data);
-    const name = `rice-orders-backup-${today()}.json`;
+    const slot = data.settings.backupNext === 'B' ? 'B' : 'A';
+    const name = `お米受注_バックアップ_${slot}.json`;
     const file = new File([text], name, { type: 'application/json' });
     if (view.backup) URL.revokeObjectURL(view.backup.url);
-    view.backup = { file, name, url: URL.createObjectURL(file), size: file.size };
+    view.backup = { file, name, slot, url: URL.createObjectURL(file), size: file.size };
     render();
     $('#backup-ready')?.scrollIntoView({ block: 'center' });
   } catch (err) {
@@ -1589,15 +1596,25 @@ async function shareBackup() {
   const b = view.backup;
   if (!b) return;
   try {
-    if (navigator.canShare?.({ files: [b.file] })) { await navigator.share({ files: [b.file] }); toast('バックアップを渡しました'); return; }
+    if (navigator.canShare?.({ files: [b.file] })) { await navigator.share({ files: [b.file] }); await backupDone(b); toast('バックアップを渡しました'); return; }
   } catch (e) {
     if (e.name === 'AbortError') return;
   }
   // 共有できない環境ではダウンロード
   const a = document.createElement('a');
   a.href = b.url; a.download = b.name; a.click();
+  await backupDone(b);
   toast('バックアップを保存しました');
 }
+
+// 書き出せたら記録して、次は反対側の名前を使う
+async function backupDone(b) {
+  data.settings.backupLast = { slot: b.slot, at: new Date().toISOString() };
+  data.settings.backupNext = b.slot === 'A' ? 'B' : 'A';
+  await persist();
+  if (view.name === 'settings') { view.backup = null; render(); }
+}
+const fmtDateTime = (iso) => { const d = new Date(iso); return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()} ${d.getHours()}:${pad(d.getMinutes())}`; };
 
 async function doImport(file) {
   const text = await file.text();
@@ -1606,7 +1623,9 @@ async function doImport(file) {
   let imported;
   try { imported = migrate(await Vault.decryptBackup(text, pass)); }
   catch (e) { return alert('復元できませんでした（パスコードが違うか、ファイルが壊れています）'); }
-  if (!confirm(`受注${imported.orders.length}件・発注者${imported.customers.length}名を復元します。現在のデータは置き換えられます。よろしいですか？`)) return;
+  let when = '';
+  try { const at = JSON.parse(text).exportedAt; if (at) when = `${fmtDateTime(at)} に書き出したバックアップです。\n`; } catch { /* 日時なし */ }
+  if (!confirm(`${when}受注${imported.orders.length}件・発注者${imported.customers.length}名を復元します。現在のデータは置き換えられます。よろしいですか？`)) return;
   data = imported;
   await persist();
   toast('復元しました');
