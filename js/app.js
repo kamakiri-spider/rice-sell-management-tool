@@ -5,7 +5,7 @@ import {
 import { Vault, eraseAll } from './vault.js';
 
 // アプリの版。更新のたびに sw.js の CACHE と一緒に上げます
-const APP_VERSION = '28';
+const APP_VERSION = '29';
 
 // ---------- ユーティリティ ----------
 const $ = (sel, el = document) => el.querySelector(sel);
@@ -547,7 +547,7 @@ function renderPreparingRice(unnotifiedCount) {
           <span class="rs-kg">${r.kg.toLocaleString('ja-JP')}kg</span>
           <span class="rs-detail">${r.detail || '—'}</span>
         </div>`).join('')}
-      ${boxTotal ? `<div class="rs-row rs-boxes"><span class="rs-type">箱</span><span class="rs-kg">${boxTotal}個</span><span class="rs-detail">${boxesText(boxes)}</span></div>` : ''}
+      ${boxTotal ? `<div class="rs-row rs-boxes"><span class="rs-type">未購入の箱</span><span class="rs-kg">${boxTotal}個</span><span class="rs-detail">${boxesText(boxes)}</span></div>` : ''}
       ${handN ? `<div class="rs-note">手渡しの${handN}件は箱なしで数えています</div>` : ''}
       ${unnotifiedCount ? `<div class="rs-note">総額未連絡の${unnotifiedCount}件は含みません</div>` : ''}
     </button>`;

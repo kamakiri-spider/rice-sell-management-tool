@@ -368,4 +368,6 @@ input[type=range] { padding: 0; accent-color: var(--primary); }
 .backup-ready p { margin: 0 0 8px; }
 
 .rice-stock .rs-boxes { border-top: 1px dashed var(--line); margin-top: 4px; padding-top: 6px; }
+.rice-stock .rs-boxes { grid-template-columns: auto auto 1fr; }
+.rice-stock .rs-boxes .rs-type { white-space: nowrap; }
 .order-card .row-box { font-size: 13px; color: var(--s-unpacked); margin-top: 2px; }
